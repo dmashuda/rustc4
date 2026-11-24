@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use c4_model::{Severity, Source, Workspace};
 use c4_render::SvgOptions;
 
+mod mcp;
 mod png;
 mod site;
 
@@ -19,8 +20,22 @@ Usage:
                                                 Write each view to a file
   rustc4 build  <path>... [-o <dir>]            Write a static site: the viewer,
                                                 the model, and every view as SVG
+  rustc4 bundle <path>... -o <file.json>        Gather a model into one file
+  rustc4 query  <path>... -- <question>         Ask about a model (see below)
+  rustc4 mcp    <path>...                       Serve the same questions to a
+                                                language model, over MCP on stdio
 
-A <path> is a .c4 (or .likec4) file, or a directory searched for them.
+A <path> is a .c4 (or .likec4) file, a directory searched for them, or a
+bundle. Give several, one per repository, to read them as one model.
+
+Questions for query:
+  overview                      What is in the model
+  search <words> [--kind k] [--tag t]
+  element <name>                One element in full
+  uses <name> [depth]           What it depends on
+  used-by <name> [depth]        What depends on it
+  path <from> <to>              How one reaches the other
+  views | view <id>             A view, as text
 
 Options:
   -o, --out <dir>       Where to write (default: the current directory; for build, ./dist)
@@ -114,20 +129,25 @@ fn collect(path: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
 
 /// Every source file under the paths given, in a fixed order.
 pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>, String> {
-    let mut files = Vec::new();
+    let mut sources = Vec::new();
     for path in paths {
+        // A bundle stands for the files it was made from.
+        if path.extension().is_some_and(|e| e == "json") {
+            let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            sources.extend(site::unbundle(&bytes).map_err(|e| format!("{}: {e}", path.display()))?);
+            continue;
+        }
+        let mut files = Vec::new();
         collect(path, &mut files)?;
+        for file in files {
+            let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            sources.push(Source { name: file.display().to_string(), text });
+        }
     }
-    if files.is_empty() {
+    if sources.is_empty() {
         return Err("no .c4 files found".into());
     }
-    files
-        .into_iter()
-        .map(|path| {
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            Ok(Source { name: path.display().to_string(), text })
-        })
-        .collect()
+    Ok(sources)
 }
 
 fn plural(n: usize, what: &str) -> String {
@@ -201,10 +221,14 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
             }
             std::fs::create_dir_all(&o.out).map_err(|e| format!("{}: {e}", o.out.display()))?;
             let renderer = if format == "png" { Some(png::Renderer::new()) } else { None };
-            for id in ws.model.view_ids() {
-                if !o.views.is_empty() && !o.views.contains(id) {
-                    continue;
-                }
+            // Every written view, or just those asked for (which may be
+            // the generated view of an element nobody wrote one for).
+            let ids: Vec<&str> = if o.views.is_empty() {
+                ws.model.view_ids()
+            } else {
+                o.views.iter().map(String::as_str).collect()
+            };
+            for id in ids {
                 let view = ws.model.compute_view(id).expect("listed views exist");
                 let diagram = c4_layout::layout(&view, &ws.model.colors);
                 let svg = c4_render::svg(&diagram, &SvgOptions { background: o.background.clone() });
@@ -237,6 +261,49 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
                 plural(ws.model.views.len(), "view")
             );
             Ok(i32::from(failed))
+        }
+        "bundle" => {
+            let o = options(&args[1..])?;
+            if o.out.extension().is_none_or(|e| e != "json") {
+                return Err("bundle needs somewhere to write: -o <file.json>".into());
+            }
+            let sources = read_sources(&o.paths)?;
+            let failed = report(&c4_model::load(&sources), err);
+            if let Some(parent) = o.out.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::write(&o.out, site::bundle(&sources)?)
+                .map_err(|e| format!("{}: {e}", o.out.display()))?;
+            let _ = writeln!(out, "{}: {}", o.out.display(), plural(sources.len(), "file"));
+            Ok(i32::from(failed))
+        }
+        "query" => {
+            let split = args
+                .iter()
+                .position(|a| a == "--")
+                .ok_or("put the question after '--': rustc4 query <path>... -- overview")?;
+            let paths: Vec<PathBuf> = args[1..split].iter().map(PathBuf::from).collect();
+            if paths.is_empty() {
+                return Err("give at least one file or directory".into());
+            }
+            let ws = c4_model::load(&read_sources(&paths)?);
+            match mcp::answer(&ws, &mcp::question(&args[split + 1..])?) {
+                Ok(text) => {
+                    let _ = writeln!(out, "{text}");
+                    Ok(0)
+                }
+                Err(text) => {
+                    let _ = writeln!(err, "{text}");
+                    Ok(1)
+                }
+            }
+        }
+        "mcp" => {
+            let o = options(&args[1..])?;
+            // Fail now, in words, rather than serve nothing.
+            read_sources(&o.paths)?;
+            mcp::serve(o.paths, &mut std::io::stdin().lock(), out);
+            Ok(0)
         }
         other => Err(format!("unknown command '{other}' (try --help)")),
     }
@@ -353,5 +420,48 @@ mod tests {
         assert_eq!(code, 2);
         assert_eq!(err, "rustc4: there is no view 'nope' (there are: index, shop, api, orders)\n");
         assert_eq!(rustc4(&["frobnicate"]).2, "rustc4: unknown command 'frobnicate' (try --help)\n");
+    }
+
+    #[test]
+    fn bundles_and_answers_questions() {
+        // Two "repositories": the shop, and another that adds to it.
+        let dir = scratch("bundle");
+        std::fs::create_dir_all(dir.join("audit")).unwrap();
+        let extra = "specification { element service } model { extend shop { audit = service 'Audit log' } audit -> db 'writes' }";
+        std::fs::write(dir.join("audit/audit.c4"), extra).unwrap();
+        let bundle = dir.join("all.json");
+        let (code, out, err) = rustc4(&[
+            "bundle",
+            "examples/shop.c4",
+            dir.join("audit").to_str().unwrap(),
+            "-o",
+            bundle.to_str().unwrap(),
+        ]);
+        assert_eq!((code, err.as_str()), (0, ""));
+        assert!(out.ends_with("all.json: 2 files\n"), "{out}");
+        // The bundle reads back as the model it was made from.
+        let (_, out, _) = rustc4(&["check", bundle.to_str().unwrap()]);
+        assert_eq!(out, "ok: 15 elements, 16 relationships, 4 views\n");
+        assert_eq!(
+            rustc4(&["bundle", "examples/shop.c4"]).2,
+            "rustc4: bundle needs somewhere to write: -o <file.json>\n"
+        );
+
+        let (code, out, _) =
+            rustc4(&["query", bundle.to_str().unwrap(), "--", "search", "audit", "--kind", "service"]);
+        assert_eq!(code, 0);
+        assert_eq!(out, "1 element:\n- shop.audit (Audit log, service)\n");
+        let (_, out, _) = rustc4(&["query", bundle.to_str().unwrap(), "--", "element", "audit"]);
+        assert!(out.contains("Written in: ") && out.contains("audit.c4:1"), "{out}");
+        let (_, out, _) = rustc4(&["query", "examples/shop.c4", "--", "used-by", "shop.db", "2"]);
+        assert!(out.contains("2 steps away"), "{out}");
+        let (code, _, err) = rustc4(&["query", "examples/shop.c4", "--", "element", "nope"]);
+        assert_eq!(code, 1);
+        assert!(err.starts_with("There is no element 'nope'."));
+        assert_eq!(
+            rustc4(&["query", "examples/shop.c4", "--", "sing"]).2,
+            "rustc4: unknown question 'sing' (try --help)\n"
+        );
+        assert!(rustc4(&["query", "examples/shop.c4"]).2.contains("put the question after '--'"));
     }
 }

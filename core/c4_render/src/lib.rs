@@ -350,7 +350,7 @@ mod tests {
         assert!(out.ends_with("</svg>"));
         assert!(out.contains("<title>Everything</title>"));
         assert!(out.contains("A &lt;User&gt; &amp; &quot;friend&quot;"));
-        assert!(out.contains(r#"<g class="node group" data-id="app" data-kind="box">"#));
+        assert!(out.contains(r#"<g class="node group" data-id="app" data-kind="box" data-view="app">"#));
         assert!(out.contains(r#"<g class="node" data-id="app.inner" data-kind="box" data-view="inner">"#));
         assert!(out.contains(
             r#"<g class="edge" data-id="user-&gt;app.inner" data-source="user" data-target="app.inner">"#

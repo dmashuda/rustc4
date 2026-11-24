@@ -158,6 +158,11 @@ pub struct Screen {
     pub empty: String,
     /// The id of the selected node or edge, as a tap reported it.
     pub selected: String,
+    /// With something selected: the ids (as taps report them) of it and of
+    /// everything it touches, the lines to and from it and what is at their
+    /// other ends. Draw the rest of the diagram faded, so one element's
+    /// connections can be read out of a crowded view. Empty: fade nothing.
+    pub related: Vec<String>,
     pub details: Option<Details>,
     pub exports: Vec<Export>,
     pub problems_title: String,
@@ -457,6 +462,7 @@ impl C4Ui {
             diagram: self.diagram.clone(),
             empty,
             selected: self.selected.clone(),
+            related: self.related(),
             details: self.details(),
             exports,
             problems_title: if self.workspace.diagnostics.is_empty() {
@@ -485,6 +491,59 @@ impl C4Ui {
                 open: "Open…".into(),
             },
         }
+    }
+
+    fn related(&self) -> Vec<String> {
+        let Some(diagram) = &self.diagram else { return Vec::new() };
+        let mut out = Vec::new();
+        match self.selected.split_once('.') {
+            Some(("node", fqn)) => {
+                // The element, and whatever is drawn inside it.
+                let inside =
+                    |id: &str| id == fqn || id.strip_prefix(fqn).is_some_and(|rest| rest.starts_with('.'));
+                if !diagram.nodes.iter().any(|n| n.id == fqn) {
+                    return out;
+                }
+                let mut nodes: Vec<&str> =
+                    diagram.nodes.iter().map(|n| n.id.as_str()).filter(|id| inside(id)).collect();
+                for edge in &diagram.edges {
+                    let (from, to) = (inside(&edge.source), inside(&edge.target));
+                    if from || to {
+                        out.push(format!("edge.{}", edge.id));
+                        nodes.push(if from { &edge.target } else { &edge.source });
+                        if from && to {
+                            nodes.push(&edge.source);
+                        }
+                    }
+                }
+                // What holds any of them, so a group is not faded over
+                // a member that is not.
+                for node in &diagram.nodes {
+                    let around = |id: &&str| {
+                        id.strip_prefix(node.id.as_str()).is_some_and(|rest| rest.starts_with('.'))
+                    };
+                    if nodes.contains(&node.id.as_str()) || nodes.iter().any(around) {
+                        out.push(format!("node.{}", node.id));
+                    }
+                }
+            }
+            Some(("edge", id)) => {
+                if let Some(edge) = diagram.edges.iter().find(|e| e.id == id) {
+                    out.push(format!("edge.{}", edge.id));
+                    for node in &diagram.nodes {
+                        let holds = |end: &str| {
+                            end == node.id
+                                || end.strip_prefix(node.id.as_str()).is_some_and(|r| r.starts_with('.'))
+                        };
+                        if holds(&edge.source) || holds(&edge.target) {
+                            out.push(format!("node.{}", node.id));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
     }
 
     fn details(&self) -> Option<Details> {
@@ -792,6 +851,54 @@ mod tests {
     }
 
     #[test]
+    fn selecting_picks_out_what_is_connected() {
+        let mut ui = shop(false);
+        ui.tap("view.shop");
+        assert!(ui.screen().related.is_empty(), "nothing selected, nothing faded");
+        let mut related = ui.tap("node.shop.events").related;
+        related.sort();
+        assert_eq!(
+            related,
+            [
+                "edge.shop.api->shop.events",
+                "edge.shop.events->shop.fulfilment",
+                "node.shop",
+                "node.shop.api",
+                "node.shop.events",
+                "node.shop.fulfilment",
+            ]
+        );
+        // A group: everything in it, and what its members reach outside.
+        let related = ui.tap("node.shop").related;
+        assert!(
+            related.contains(&"node.customer".to_string()) && related.contains(&"node.shop.db".to_string())
+        );
+        assert!(related.contains(&"edge.shop.web->shop.api".to_string()));
+        assert!(!related.contains(&"edge.mail->customer".to_string()));
+        // A line: itself and its two ends (and the group around them).
+        let mut related = ui.tap("edge.customer->shop.web").related;
+        related.sort();
+        assert_eq!(related, ["edge.customer->shop.web", "node.customer", "node.shop", "node.shop.web"]);
+        assert!(ui.tap("canvas").related.is_empty());
+    }
+
+    #[test]
+    fn everything_with_something_inside_can_be_gone_into() {
+        // No view of `shop.api` is written here, only of the landscape.
+        let text = SHOP.split("views {").next().unwrap().to_string() + "views { view index { include * } }";
+        let mut ui = C4Ui::new(vec![Source { name: "shop.c4".into(), text }], false);
+        let screen = ui.screen();
+        assert_eq!(texts(&screen.views), ["Landscape"], "generated views are not listed");
+        assert_eq!(screen.status, "14 elements · 15 relationships · 1 view");
+        let screen = ui.tap("open.shop");
+        assert_eq!((screen.view.as_str(), screen.title.as_str()), ("shop", "Shop"));
+        let screen = ui.tap("open.shop.api");
+        assert_eq!((screen.view.as_str(), screen.title.as_str()), ("shop_api", "API"));
+        assert_eq!(ui.tap("back").view, "shop");
+        assert_eq!(ui.tap("view.shop_api").view, "shop_api", "and by its id, as a link would");
+    }
+
+    #[test]
     fn a_model_can_be_split_over_files() {
         // A model with no specification: every kind is unknown.
         let model = "model { a = box 'A'; b = box 'B'; a -> b }";
@@ -870,6 +977,7 @@ mod tests {
                 "exports",
                 "problems",
                 "problemsTitle",
+                "related",
                 "selected",
                 "status",
                 "title",

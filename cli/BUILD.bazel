@@ -32,6 +32,7 @@ rust_library(
     deps = [
         "//core/c4_layout",
         "//core/c4_model",
+        "//core/c4_query",
         "//core/c4_render",
         "@crates//:resvg",
         "@crates//:serde_json",

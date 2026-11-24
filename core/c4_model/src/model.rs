@@ -115,6 +115,22 @@ pub struct Element {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     pub style: ElementStyle,
+    pub origin: Origin,
+}
+
+/// Where something was written: in a model gathered from many
+/// repositories, the way from an element back to who owns it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Origin {
+    /// The source's name, as it was given to [`load`].
+    pub file: String,
+    pub line: u32,
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file, self.line)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +143,7 @@ pub struct Relation {
     pub technology: String,
     pub tags: Vec<String>,
     pub style: RelationStyle,
+    pub origin: Origin,
 }
 
 /// A view as written, with its element references resolved lazily when it
@@ -149,6 +166,9 @@ pub struct Model {
     pub elements: Vec<Element>,
     pub relations: Vec<Relation>,
     pub views: Vec<View>,
+    /// A view of each element that has children and no written view of it.
+    /// Reached by going into the element, and by id; not listed.
+    pub generated_views: Vec<View>,
     /// `specification { color name #hex }`
     pub colors: BTreeMap<String, String>,
     pub(crate) by_fqn: BTreeMap<String, usize>,
@@ -180,8 +200,18 @@ impl Model {
         self.by_fqn.get(fqn).copied()
     }
 
+    /// The element a name means when nothing says where it was written: a
+    /// full name (`shop.api`), or a short one that only one element has.
+    pub fn find(&self, name: &str) -> Option<usize> {
+        let parts: Vec<String> = name.split('.').map(str::to_string).collect();
+        if parts.iter().any(|p| p.is_empty()) {
+            return None;
+        }
+        self.resolve(&parts, None)
+    }
+
     pub fn view_def(&self, id: &str) -> Option<&View> {
-        self.views.iter().find(|v| v.id == id)
+        self.views.iter().chain(&self.generated_views).find(|v| v.id == id)
     }
 
     /// Whether `a` is `b` or contains it, however deep.
@@ -249,11 +279,13 @@ impl Model {
 
 // ------------------------------------------------------------ building --
 
+#[derive(PartialEq)]
 struct KindSpec {
     style: ElementStyle,
     technology: Option<String>,
 }
 
+#[derive(PartialEq)]
 struct RelKindSpec {
     style: RelationStyle,
     technology: Option<String>,
@@ -305,19 +337,35 @@ pub fn load(sources: &[Source]) -> Workspace {
                 SpecItem::Element { name, span, style, technology } => {
                     let mut resolved = ElementStyle::default();
                     b.element_style(style, &mut resolved);
-                    if b.kinds
-                        .insert(name.clone(), KindSpec { style: resolved, technology: technology.clone() })
-                        .is_some()
-                    {
-                        b.error(*span, format!("The element kind '{name}' is specified twice."));
+                    // The same kind, specified the same way, in more than
+                    // one file is fine: repositories gathered into one
+                    // model each carry the specification they were
+                    // checked against. Two that disagree is a problem.
+                    let spec = KindSpec { style: resolved, technology: technology.clone() };
+                    match b.kinds.get(name) {
+                        Some(known) if *known == spec => {}
+                        Some(_) => b.error(
+                            *span,
+                            format!("The element kind '{name}' is specified twice, and differently."),
+                        ),
+                        None => {
+                            b.kinds.insert(name.clone(), spec);
+                        }
                     }
                 }
                 SpecItem::Relationship { name, span, style, technology } => {
                     let mut resolved = RelationStyle::default();
                     b.relation_style(style, &mut resolved);
                     let spec = RelKindSpec { style: resolved, technology: technology.clone() };
-                    if b.rel_kinds.insert(name.clone(), spec).is_some() {
-                        b.error(*span, format!("The relationship kind '{name}' is specified twice."));
+                    match b.rel_kinds.get(name) {
+                        Some(known) if *known == spec => {}
+                        Some(_) => b.error(
+                            *span,
+                            format!("The relationship kind '{name}' is specified twice, and differently."),
+                        ),
+                        None => {
+                            b.rel_kinds.insert(name.clone(), spec);
+                        }
                     }
                 }
                 SpecItem::Tag | SpecItem::Color { .. } => {}
@@ -339,18 +387,43 @@ pub fn load(sources: &[Source]) -> Workspace {
         }
     }
     b.extends();
+    let everything = || {
+        vec![ViewRule::Include(vec![ast::Predicate::Element {
+            expr: ast::ElementExpr::Wildcard,
+            with: StyleProps::default(),
+        }])]
+    };
     if b.model.views.is_empty() && !b.model.elements.is_empty() {
         b.model.views.push(View {
             id: "index".into(),
             title: "Landscape".into(),
             description: String::new(),
             of: None,
-            rules: vec![ViewRule::Include(vec![ast::Predicate::Element {
-                expr: ast::ElementExpr::Wildcard,
-                with: StyleProps::default(),
-            }])],
+            rules: everything(),
             extends: None,
         });
+    }
+    // Anything with something inside it can be looked into, whether or not
+    // someone wrote a view of it: a model scraped together from a hundred
+    // repositories is explored by going in, one level at a time.
+    for i in 0..b.model.elements.len() {
+        let el = &b.model.elements[i];
+        if el.children.is_empty() || b.model.views.iter().any(|v| v.of == Some(i)) {
+            continue;
+        }
+        let mut id = el.fqn.replace('.', "_");
+        while b.model.view_def(&id).is_some() {
+            id.push('_');
+        }
+        let view = View {
+            id,
+            title: el.title.clone(),
+            description: String::new(),
+            of: Some(i),
+            rules: everything(),
+            extends: None,
+        };
+        b.model.generated_views.push(view);
     }
     b.diagnostics.sort_by(|x, y| (&x.file, x.line, x.col).cmp(&(&y.file, y.line, y.col)));
     Workspace { model: b.model, diagnostics: b.diagnostics }
@@ -380,6 +453,13 @@ impl Builder<'_> {
     fn report(&mut self, span: Span, severity: Severity, message: String) {
         let file = self.sources.get(span.file).map(|s| s.name.clone()).unwrap_or_default();
         self.diagnostics.push(Diagnostic { file, line: span.line, col: span.col, severity, message });
+    }
+
+    fn origin(&self, span: Span) -> Origin {
+        Origin {
+            file: self.sources.get(span.file).map(|s| s.name.clone()).unwrap_or_default(),
+            line: span.line,
+        }
     }
 
     fn error(&mut self, span: Span, message: String) {
@@ -565,6 +645,7 @@ impl Builder<'_> {
             parent,
             children: Vec::new(),
             style,
+            origin: self.origin(def.span),
         });
         self.model.by_fqn.insert(fqn, index);
         if let Some(p) = parent {
@@ -660,6 +741,7 @@ impl Builder<'_> {
                         ),
                         tags: def.tags.clone(),
                         style,
+                        origin: self.origin(def.span),
                     });
                 }
             }

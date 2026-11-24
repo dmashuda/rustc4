@@ -220,6 +220,7 @@ pub struct Screen {
     pub diagram: Option<Diagram>,
     pub empty: String,
     pub selected: String,
+    pub related: Vec<String>,
     pub details: Option<Details>,
     pub exports: Vec<Export>,
     pub problems_title: String,

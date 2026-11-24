@@ -36,6 +36,33 @@ fn relative_names(sources: &[Source]) -> Vec<String> {
         .collect()
 }
 
+/// The sources as one file: what the viewer loads, and what every command
+/// here reads back in place of the files it was made from.
+pub fn bundle(sources: &[Source]) -> Result<Vec<u8>, String> {
+    let names = relative_names(sources);
+    let model = serde_json::json!({
+        "sources": sources
+            .iter()
+            .zip(&names)
+            .map(|(s, name)| serde_json::json!({ "name": name, "text": s.text }))
+            .collect::<Vec<_>>(),
+    });
+    serde_json::to_vec(&model).map_err(|e| e.to_string())
+}
+
+/// The sources in a bundle.
+pub fn unbundle(bytes: &[u8]) -> Result<Vec<Source>, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| format!("not a bundle: {e}"))?;
+    let sources = value["sources"].as_array().ok_or("not a bundle: it has no \"sources\"")?;
+    sources
+        .iter()
+        .map(|s| match (s["name"].as_str(), s["text"].as_str()) {
+            (Some(name), Some(text)) => Ok(Source { name: name.into(), text: text.into() }),
+            _ => Err("not a bundle: a source needs a \"name\" and a \"text\"".to_string()),
+        })
+        .collect()
+}
+
 /// Writes the site into `dir`; returns how many files.
 pub fn write(dir: &Path, sources: &[Source], ws: &Workspace) -> Result<usize, String> {
     let put = |name: &str, bytes: &[u8]| -> Result<(), String> {
@@ -52,15 +79,7 @@ pub fn write(dir: &Path, sources: &[Source], ws: &Workspace) -> Result<usize, St
     }
     // What the viewer loads: the sources themselves. It reads them with the
     // same code this does, so the site shows exactly what was checked here.
-    let names = relative_names(sources);
-    let model = serde_json::json!({
-        "sources": sources
-            .iter()
-            .zip(&names)
-            .map(|(s, name)| serde_json::json!({ "name": name, "text": s.text }))
-            .collect::<Vec<_>>(),
-    });
-    put("model.json", &serde_json::to_vec(&model).map_err(|e| e.to_string())?)?;
+    put("model.json", &bundle(sources)?)?;
     count += 1;
     for id in ws.model.view_ids() {
         let view = ws.model.compute_view(id).expect("listed views exist");

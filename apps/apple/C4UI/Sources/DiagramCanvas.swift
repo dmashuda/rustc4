@@ -45,6 +45,7 @@ struct Camera: Equatable {
 struct DiagramCanvas: View {
     let diagram: Diagram
     let selected: String
+    let related: [String]
     let controls: Controls
     let onTap: (String) -> Void
 
@@ -57,7 +58,8 @@ struct DiagramCanvas: View {
             Canvas { context, _ in
                 context.translateBy(x: camera.offset.width, y: camera.offset.height)
                 context.scaleBy(x: camera.scale, y: camera.scale)
-                DiagramDrawing(diagram: diagram, selected: selected, accent: .accentColor).draw(in: &context)
+                DiagramDrawing(diagram: diagram, selected: selected, related: Set(related), accent: .accentColor)
+                    .draw(in: &context)
             }
             .accessibilityIdentifier("diagram")
             .accessibilityLabel(diagram.title)

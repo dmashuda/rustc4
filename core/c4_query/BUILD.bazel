@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Questions about a model, answered in text: what is there, what talks to
+# what, how one thing reaches another. For people at a command line and for
+# language models over MCP; nothing here knows which.
+rust_library(
+    name = "c4_query",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = [
+        "//bindings:__subpackages__",
+        "//cli:__subpackages__",
+        "//core:__subpackages__",
+    ],
+    deps = ["//core/c4_model"],
+)
+
+rust_test(
+    name = "c4_query_test",
+    size = "small",
+    crate = ":c4_query",
+    compile_data = ["//examples:shop.c4"],
+)
