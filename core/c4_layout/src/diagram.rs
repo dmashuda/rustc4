@@ -31,6 +31,8 @@ pub enum LineStyle {
     Solid,
     Dashed,
     Dotted,
+    /// Not drawn at all: a box with no border. Never an edge's.
+    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

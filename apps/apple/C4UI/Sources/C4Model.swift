@@ -21,6 +21,9 @@ public final class C4Model {
     /// What was opened: files and directories, re-read when they change.
     @ObservationIgnored private var roots: [URL] = []
     @ObservationIgnored private var fingerprint = ""
+    /// What the model named besides its own files, when it was last read:
+    /// an icon's image, a description's text. Watched like the rest.
+    @ObservationIgnored private var named: [URL] = []
     @ObservationIgnored private var timer: Timer?
 
     /// Opens on the example model, with its source there to edit.
@@ -46,6 +49,17 @@ public final class C4Model {
 
     // MARK: Models on disk
 
+    /// The files and folders a command line names. `bazel run` starts the
+    /// app somewhere of its own and says where the command was typed, in
+    /// `BUILD_WORKING_DIRECTORY`: a path that is not absolute is meant
+    /// from there.
+    public nonisolated static func urls(forArguments arguments: [String], environment: [String: String]) -> [URL] {
+        let typedIn = environment["BUILD_WORKING_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return arguments.filter { !$0.hasPrefix("-") }.map { path in
+            URL(fileURLWithPath: path, relativeTo: path.hasPrefix("/") ? nil : typedIn).standardizedFileURL
+        }
+    }
+
     /// Shows the model in these files and directories, and keeps showing
     /// it as they change: edit in any editor, and the window follows.
     public func open(_ urls: [URL], watching: Bool = true) {
@@ -63,19 +77,47 @@ public final class C4Model {
     public func reloadIfChanged() {
         guard !roots.isEmpty else { return }
         let files = Self.sourceFiles(in: roots)
-        let now = files.map { "\($0.url.path)@\($0.modified.timeIntervalSince1970)" }.joined(separator: "\n")
-        guard now != fingerprint else { return }
-        fingerprint = now
-        let sources = files.compactMap { file in
+        let stamp = { (urls: [URL]) in
+            urls.map { url in
+                // Asked of the file each time: a URL remembers what it was told.
+                let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+                return "\(url.path)@\((modified ?? .distantPast).timeIntervalSince1970)"
+            }.joined(separator: "\n")
+        }
+        guard stamp(files.map(\.url) + named) != fingerprint else { return }
+        var sources = files.compactMap { file in
             (try? String(contentsOf: file.url, encoding: .utf8)).map { Source(name: file.name, text: $0) }
         }
         screen = ui.setSources(sources: sources, editable: false)
+        // What the model names besides: Rust says which files, by the
+        // names they would have; finding and reading them is done here.
+        named = []
+        for name in ui.wanted() {
+            guard let url = Self.locate(name, in: roots), let text = try? String(contentsOf: url, encoding: .utf8)
+            else { continue }
+            sources.append(Source(name: name, text: text))
+            named.append(url)
+        }
+        if !named.isEmpty { screen = ui.setSources(sources: sources, editable: false) }
+        fingerprint = stamp(files.map(\.url) + named)
         generation += 1
     }
 
-    /// Every `.c4` and `.likec4` file under the roots, and every `.svg`
-    /// (an icon's image, which the model takes as one more source), in a
-    /// fixed order, named by its path below the root it was found under.
+    /// The file a source means by this name: names are paths below a root
+    /// that is a folder, or beside one that is a file.
+    static func locate(_ name: String, in roots: [URL]) -> URL? {
+        for root in roots {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else { continue }
+            let base = isDirectory.boolValue ? root : root.deletingLastPathComponent()
+            let url = base.appendingPathComponent(name).standardizedFileURL
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    /// Every `.c4` and `.likec4` file under the roots, in a fixed order,
+    /// named by its path below the root it was found under.
     static func sourceFiles(in roots: [URL]) -> [(url: URL, name: String, modified: Date)] {
         let manager = FileManager.default
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
@@ -95,7 +137,7 @@ public final class C4Model {
                 at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants])
             var inside: [(url: URL, name: String, modified: Date)] = []
             while let url = walk?.nextObject() as? URL {
-                guard ["c4", "likec4", "svg"].contains(url.pathExtension) else { continue }
+                guard ["c4", "likec4"].contains(url.pathExtension) else { continue }
                 let path = url.standardizedFileURL.path
                 let name = path.hasPrefix(base + "/") ? String(path.dropFirst(base.count + 1)) : url.lastPathComponent
                 inside.append((url, name, modified(url)))

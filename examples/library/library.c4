@@ -1,0 +1,173 @@
+// A public library: an example of how LikeC4 writes relationships and of
+// what a view can say about them.
+//
+//   bazel run //cli -- export png examples/library -o out --background '#fff'
+//   bazel run //apps/macos:rustc4 -- examples/library
+
+specification {
+  color paper rgb(120, 113, 108)
+
+  element person {
+    notation 'Someone at the library'
+    style {
+      shape person
+      color green
+    }
+  }
+  // A kind's tags are every element's of that kind.
+  element service {
+    #ours
+    notation 'A service the library runs'
+  }
+  element store {
+    #ours
+    notation 'Where records are kept'
+    style { shape storage }
+  }
+  element supplier {
+    notation 'Run by someone else'
+    style { color paper }
+  }
+  // Not a thing that runs: words on the diagram, with no border.
+  element note {
+    style {
+      border none
+      color muted
+      size small
+    }
+  }
+
+  // What a kind says of every relationship of that kind.
+  relationship feed {
+    #nightly
+    notation 'Sent overnight, in one batch'
+    technology 'SFTP'
+    line dotted
+    head vee
+  }
+  relationship has {
+    notation 'One has many'
+    line solid
+    head crow
+  }
+
+  tag ours
+  tag nightly
+  tag reviewed
+}
+
+model {
+  member = person 'Member' 'Borrows books'
+  librarian = person 'Librarian' 'Runs the desk'
+
+  desk = service 'Desk' 'Loans, returns and fines' 'Rust' {
+    metadata {
+      owner 'front-of-house'
+      // A list: `where metadata.sites is 'north'` finds it.
+      sites ['central', 'north']
+    }
+  }
+  catalogue = service 'Catalogue' {
+    technology 'Rust'
+    // Its description is kept in a file of its own, beside this one.
+    descriptionFile ./docs/catalogue.md
+    metadata {
+      owner 'collections'
+      sites ['central']
+    }
+  }
+  search = service 'Search' 'Finds a book by anything about it' 'Rust' {
+    // Three quotes: text with quotes of its own.
+    description '''
+      Finds a book by a phrase like "the one with the whale".
+    '''
+  }
+
+  shelves = store 'Shelf records' 'Which copy is where' 'PostgreSQL'
+  loans = store 'Loans' 'Who has what, and until when' 'PostgreSQL'
+
+  union = supplier 'Union catalogue' 'What every library in the region owns'
+  publisher = supplier 'Publishers' 'New titles and their details'
+
+  closing = note 'The desk closes at 8' 'Returns go in the box outside'
+
+  member -> desk 'borrows from'
+  librarian -> desk 'works at'
+  member -> search 'looks for books with'
+
+  // Title, then description, then technology.
+  desk -> catalogue 'checks a copy' 'Is it in, and may it go out?' 'gRPC'
+  search -> catalogue 'reads' {
+    technology 'gRPC'
+    link https://example.com/api/catalogue 'The catalogue API'
+  }
+
+  // The dot form of a kind, and the arrow form.
+  catalogue .has shelves 'copies'
+  desk -[has]-> loans 'loans'
+
+  // Both ways: an arrowhead at each end.
+  catalogue <-> union 'shares records with' {
+    link https://example.com/union-protocol 'How records are shared'
+  }
+  publisher -[feed]-> catalogue 'new titles'
+  catalogue -[feed]-> search 'the index'
+
+  // More of what is written above: tags and metadata for an element, a
+  // link and a tag for a relationship.
+  extend desk {
+    #reviewed
+    metadata { sites 'east' }
+  }
+  extend desk -> catalogue 'checks a copy' {
+    #reviewed
+    link https://example.com/runbooks/desk 'The desk runbook'
+  }
+}
+
+views {
+  view index {
+    title 'The library'
+    description 'Crow\'s feet, vee heads, a both-way line and a box with no border'
+    include *
+  }
+
+  view feeds {
+    title 'What moves overnight'
+    description 'Relationships of one kind, restyled in this view only'
+    // Only relationships of the kind `feed`...
+    include * -[feed]-> *
+    // ...and here, in this view, they are drawn loud.
+    include * -[feed]-> * with {
+      color red
+      line solid
+    }
+  }
+
+  view sharing {
+    title 'Who the catalogue shares with'
+    description 'A both-way relationship is found from either end'
+    // `<->` goes into the union catalogue as much as out of it.
+    include -> union
+    include catalogue <-> union with {
+      title 'records, both ways'
+      head diamond
+      tail diamond
+      color indigo
+    }
+  }
+
+  view north {
+    title 'What runs at the north site'
+    description 'where: one value of a metadata list'
+    include * where metadata.sites is 'north'
+    include -> desk, desk ->
+  }
+
+  view reviewed {
+    title 'What has been reviewed'
+    description 'Tags from a kind, from the element, and from extend'
+    include * where tag is #reviewed or kind is store
+    include desk -> catalogue with { color green; line solid }
+  }
+}

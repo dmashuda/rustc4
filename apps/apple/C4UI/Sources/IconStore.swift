@@ -11,6 +11,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class IconStore {
+    /// One for the whole app: what the window has fetched, an export has.
+    static let shared = IconStore()
+
     /// Goes up as each fetched image arrives.
     private(set) var arrived = 0
     @ObservationIgnored private var images: [String: Image] = [:]

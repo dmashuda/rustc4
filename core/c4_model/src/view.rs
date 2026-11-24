@@ -101,6 +101,9 @@ struct Computing<'a> {
     overrides: BTreeMap<usize, StyleProps>,
     /// Each with its `where`, if it had one.
     excluded: Vec<(RelFilter, Option<Condition>)>,
+    /// From `include a -> b with { }`: which relationships, and what is
+    /// said of the lines that draw them, in the order written.
+    restyled: Vec<(RelFilter, Option<Condition>, StyleProps)>,
 }
 
 /// What a `where` condition can ask about one thing.
@@ -173,6 +176,7 @@ impl Model {
             visible: vec![false; self.elements.len()],
             overrides: BTreeMap::new(),
             excluded: Vec::new(),
+            restyled: Vec::new(),
         };
         let rules = self.rules_of(view);
         // A sequence reads across, unless the view says otherwise.
@@ -326,10 +330,7 @@ impl Model {
             if self.is_ancestor_or_self(source, target) || self.is_ancestor(target, source) {
                 continue;
             }
-            if c.excluded.iter().any(|(f, cond)| {
-                c.filter_matches(f, rel.source, rel.target)
-                    && cond.as_ref().is_none_or(|cond| c.relation_holds(cond, rel))
-            }) {
+            if c.excluded.iter().any(|(f, cond)| c.filter_takes(f, cond.as_ref(), rel)) {
                 continue;
             }
             let index = *by_ends.entry((source, target)).or_insert_with(|| {
@@ -379,6 +380,32 @@ impl Model {
             if rels.len() == 1 || rels.iter().all(|r| r.technology == rels[0].technology) {
                 edge.technology = rels[0].technology.clone();
             }
+            // Then what the view says of this line: `include a -> b with { }`.
+            for (filter, cond, props) in &c.restyled {
+                if !rels.iter().any(|rel| c.filter_takes(filter, cond.as_ref(), rel)) {
+                    continue;
+                }
+                for (key, value, _) in &props.0 {
+                    match key.as_str() {
+                        "title" => edge.label = value.trim().to_string(),
+                        "technology" => edge.technology = value.trim().to_string(),
+                        "notation" => edge.notation = value.trim().to_string(),
+                        "color"
+                            if crate::model::THEME_COLORS.contains(&value.as_str())
+                                || self.colors.contains_key(value) =>
+                        {
+                            edge.color = value.clone();
+                        }
+                        // A relationship always has a line.
+                        "line" => {
+                            edge.line = Line::parse(value).filter(|l| *l != Line::None).unwrap_or(edge.line)
+                        }
+                        "head" => edge.head = Arrow::parse(value).unwrap_or(edge.head),
+                        "tail" => edge.tail = Arrow::parse(value).unwrap_or(edge.tail),
+                        _ => {}
+                    }
+                }
+            }
         }
 
         Some(ComputedView {
@@ -424,14 +451,7 @@ fn apply_style(model: &Model, props: &StyleProps, style: &mut ElementStyle) {
             {
                 style.color = value.clone();
             }
-            "border" => {
-                style.border = match value.as_str() {
-                    "dashed" => Line::Dashed,
-                    "dotted" => Line::Dotted,
-                    "solid" | "none" => Line::Solid,
-                    _ => style.border,
-                }
-            }
+            "border" => style.border = Line::parse(value).unwrap_or(style.border),
             "opacity" => {
                 if let Ok(n) = value.trim_end_matches('%').parse::<f64>() {
                     style.opacity = (n / 100.0).clamp(0.0, 1.0);
@@ -528,9 +548,10 @@ impl Computing<'_> {
             }
             let source_in = model.is_ancestor_or_self(x, rel.source);
             let target_in = model.is_ancestor_or_self(x, rel.target);
+            // One that goes both ways comes in and goes out at each end.
             let other = match (source_in, target_in) {
-                (true, false) if outgoing => rel.target,
-                (false, true) if incoming => rel.source,
+                (true, false) if outgoing || rel.both => rel.target,
+                (false, true) if incoming || rel.both => rel.source,
                 _ => continue,
             };
             if model.is_ancestor(other, x) {
@@ -591,7 +612,11 @@ impl Computing<'_> {
                     }
                 }
             }
-            Predicate::Relation(rel, cond) => {
+            Predicate::Relation(rel, cond, with) => {
+                if !with.0.is_empty() {
+                    let filter = self.rel_filter(rel);
+                    self.restyled.push((filter, cond.clone(), with.clone()));
+                }
                 let cond = cond.as_ref();
                 let (expr, incoming, outgoing) = match rel {
                     RelExpr::Incoming(e) => (e, true, false),
@@ -602,9 +627,13 @@ impl Computing<'_> {
                         let (from, to) = (self.elements(a), self.elements(b));
                         for &s in &from {
                             for &t in &to {
-                                let related = self.model.relations.iter().any(|r| {
-                                    self.model.is_ancestor_or_self(s, r.source)
-                                        && self.model.is_ancestor_or_self(t, r.target)
+                                let model = self.model;
+                                let joins = |a: usize, b: usize, r: &Relation| {
+                                    model.is_ancestor_or_self(a, r.source)
+                                        && model.is_ancestor_or_self(b, r.target)
+                                };
+                                let related = model.relations.iter().any(|r| {
+                                    (joins(s, t, r) || (r.both && joins(t, s, r)))
                                         && cond.is_none_or(|cond| self.relation_holds(cond, r))
                                 });
                                 if related && s != t {
@@ -641,18 +670,29 @@ impl Computing<'_> {
                     }
                 }
             }
-            Predicate::Relation(rel, cond) => {
-                let filter = match rel {
-                    RelExpr::Incoming(e) => RelFilter::Incoming(self.filter_elements(e)),
-                    RelExpr::Outgoing(e) => RelFilter::Outgoing(self.filter_elements(e)),
-                    RelExpr::InOut(e) => RelFilter::InOut(self.filter_elements(e)),
-                    RelExpr::Direct(a, b) => {
-                        RelFilter::Direct(self.filter_elements(a), self.filter_elements(b))
-                    }
-                };
+            Predicate::Relation(rel, cond, _) => {
+                let filter = self.rel_filter(rel);
                 self.excluded.push((filter, cond.clone()));
             }
         }
+    }
+
+    /// A relationship predicate with its elements found.
+    fn rel_filter(&self, rel: &RelExpr) -> RelFilter {
+        match rel {
+            RelExpr::Incoming(e) => RelFilter::Incoming(self.filter_elements(e)),
+            RelExpr::Outgoing(e) => RelFilter::Outgoing(self.filter_elements(e)),
+            RelExpr::InOut(e) => RelFilter::InOut(self.filter_elements(e)),
+            RelExpr::Direct(a, b) => RelFilter::Direct(self.filter_elements(a), self.filter_elements(b)),
+        }
+    }
+
+    /// Whether a predicate, with its `where`, is about this relationship:
+    /// one that goes both ways is taken from either end.
+    fn filter_takes(&self, filter: &RelFilter, cond: Option<&Condition>, rel: &Relation) -> bool {
+        (self.filter_matches(filter, rel.source, rel.target)
+            || (rel.both && self.filter_matches(filter, rel.target, rel.source)))
+            && cond.is_none_or(|cond| self.relation_holds(cond, rel))
     }
 
     /// For a relationship filter, `*` means anything at all.
@@ -1350,9 +1390,9 @@ views {{
   relationship r { multiple true }
 }
 model {
-  a = box { descriptionFile ./a.md; style { shape document; border none } }
+  a = box { descriptionFile ./a.docx; style { shape document } }
   b = box
-  a -> b { head crow; navigateTo v }
+  a -> b { multiple true; navigateTo v }
 }
 diff plan 'A plan' { remove { a } }
 views {
@@ -1362,7 +1402,7 @@ views {
     routing ortho
     rank same { a, b }
     group 'G' { include a }
-    include a -> b with { color red }
+    include a -> b with { navigateTo v }
   }
   dynamic view d {
     a -> b { metadata { k 'v' } }
@@ -1384,10 +1424,9 @@ views {
                 "5:'deploymentNode' kinds are not supported yet; this one is ignored.",
                 "6:A link on a kind is not supported yet; give it to the elements themselves.",
                 "7:'multiple' on a relationship is not supported yet; relationships between the same two boxes are drawn as one line.",
-                "10:'descriptionFile' is not supported yet; write the text as its description.",
+                "10:A description from a file like './a.docx' is not supported yet; use a .md or .txt file.",
                 "10:The shape 'document' is not supported yet; it is drawn as a rectangle.",
-                "10:'border none' is not supported yet; the border is drawn solid.",
-                "12:The arrow 'crow' is not supported yet; it is drawn as 'open'.",
+                "12:'multiple' on a relationship is not supported yet; relationships between the same two boxes are drawn as one line.",
                 "12:'navigateTo' on a relationship is not supported yet; it goes nowhere.",
                 "14:'diff' blocks are not supported yet; this one is ignored.",
                 "17:A link on a view is not supported yet; it is not shown anywhere.",
@@ -1395,7 +1434,7 @@ views {
                 "19:'ortho' routing is not supported yet; lines are drawn as curves.",
                 "20:'rank' is not supported yet; the layout chooses the rows.",
                 "21:'group' is not supported yet; what it includes is shown without a frame around it.",
-                "22:'with' after a relationship is not supported yet; the line is drawn as the model has it.",
+                "22:'navigateTo' on a relationship is not supported yet; it goes nowhere.",
                 "25:'metadata' on a step is not supported yet; it is ignored.",
                 "26:Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
                 "27:Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
@@ -1407,6 +1446,131 @@ views {
         let steps = ws.model.compute_view("d").unwrap();
         let said: Vec<&str> = steps.edges.iter().map(|e| e.step.as_str()).collect();
         assert_eq!(said, ["1", "2", "3", "4", "5", "6", "7"]);
+    }
+
+    #[test]
+    fn a_line_is_what_its_view_says_with() {
+        let ws = load(&[Source {
+            name: "fleet.c4".into(),
+            text: format!(
+                "{FLEET}
+views {{
+  view restyled {{
+    include *
+    include web -> api with {{ title 'asks'; technology 'gRPC'; color red; line solid; head crow; tail vee }}
+    include api -> * where kind is async with {{ color green; notation 'Queued' }}
+    include -> legacy with {{ line none; head sideways; color nothing }}
+  }}
+  view plain {{ include * }}
+}}"
+            ),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        // What `with` says is checked like any relationship's looks.
+        assert_eq!(
+            messages,
+            [
+                "A relationship always has a line: use solid, dashed or dotted.",
+                "Unknown arrow 'sideways': use none, normal, onormal, open, vee, crow, diamond, odiamond, dot or odot.",
+                "Unknown color 'nothing'. Use one of primary, secondary, muted, slate, blue, indigo, sky, red, gray, green, amber, or define it: specification { color nothing #rrggbb }.",
+            ]
+        );
+        let looks = |view: &str| {
+            let view = ws.model.compute_view(view).unwrap();
+            view.edges
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{} {:?} {} {} {:?} {:?}>{:?} {:?}",
+                        e.id, e.label, e.technology, e.color, e.line, e.tail, e.head, e.notation
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            looks("restyled"),
+            [
+                "web->api \"asks\" gRPC red Solid Vee>Crow \"\"",
+                "api->db \"reads\"  gray Dashed None>Normal \"\"",
+                "api->jobs \"queues\"  green Dashed None>Normal \"Queued\"",
+                // What could not be read of it changed nothing.
+                "jobs->legacy \"feeds\"  gray Dashed None>Normal \"\"",
+            ]
+        );
+        // Only in the view that says so.
+        assert_eq!(looks("plain")[0], "web->api \"calls\"  gray Dashed None>Normal \"\"");
+    }
+
+    #[test]
+    fn a_relationship_both_ways_is_one_from_either_end() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification { element box }
+model {
+  a = box; b = box; c = box; d = box
+  a <-> b 'talk' { link https://example.com/talk 'How they talk'; link ./docs/talk.md }
+  c -> d
+  extend a <-> b 'talk' { link https://example.com/more }
+}
+views {
+  view into_a { include -> a }
+  view out_of_b { include b -> }
+  view b_to_a { include b -> a }
+  view into_c { include -> c }
+  view cut { include *; exclude b -> a }
+}"
+            .into(),
+        }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        // `a <-> b` goes into a and out of b as much as the other way.
+        assert_eq!(shows(&ws, "into_a"), "a b");
+        assert_eq!(shows(&ws, "out_of_b"), "a b");
+        assert_eq!(shows(&ws, "b_to_a"), "a b");
+        // `c -> d` goes only one way.
+        assert_eq!(shows(&ws, "into_c"), "");
+        let cut = ws.model.compute_view("cut").unwrap();
+        assert_eq!(cut.edges.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["c->d"]);
+        let links: Vec<_> =
+            ws.model.relations[0].links.iter().map(|(url, title)| format!("{url}|{title}")).collect();
+        assert_eq!(
+            links,
+            ["https://example.com/talk|How they talk", "./docs/talk.md|", "https://example.com/more|"]
+        );
+    }
+
+    #[test]
+    fn a_description_can_be_kept_in_a_file() {
+        let model = Source {
+            name: "arch/m.c4".into(),
+            text: "specification { element box }
+model {
+  a = box { descriptionFile ./docs/a.md }
+  b = box { descriptionFile ../shared.txt; description 'Said here' }
+  c = box { descriptionFile ./c.docx }
+  d = box { style { border none } }
+}"
+            .into(),
+        };
+        let ws = load(std::slice::from_ref(&model));
+        assert_eq!(ws.wanted, ["arch/docs/a.md"]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert_eq!(
+            messages,
+            [
+                "3:There is no file 'arch/docs/a.md' for this description: check the path, or write the text as its description.",
+                "5:A description from a file like './c.docx' is not supported yet; use a .md or .txt file.",
+            ]
+        );
+        // With the file, it is one more source, and not read as a model.
+        let text = Source { name: "arch/docs/a.md".into(), text: "\n  # A\n\n  Does **things**.\n".into() };
+        let ws = load(&[model, text]);
+        assert_eq!(ws.diagnostics.len(), 1, "{:?}", ws.diagnostics);
+        assert!(ws.wanted.is_empty());
+        assert_eq!(ws.model.elements.len(), 4);
+        assert_eq!(ws.model.element("a").unwrap().description, "# A\n\nDoes **things**.");
+        // Written out, it is what is written.
+        assert_eq!(ws.model.element("b").unwrap().description, "Said here");
+        assert_eq!(ws.model.element("d").unwrap().style.border, crate::Line::None);
     }
 
     /// The model the `where` and `global` tests ask about.

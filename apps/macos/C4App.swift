@@ -15,9 +15,11 @@ struct C4App: App {
         ])
         let model = C4Model()
         // `open -a rustc4 --args <path>...`, or a path on the command line.
-        let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
-        if !paths.isEmpty {
-            model.open(paths.map { URL(fileURLWithPath: $0) })
+        let urls = C4Model.urls(
+            forArguments: Array(CommandLine.arguments.dropFirst()),
+            environment: ProcessInfo.processInfo.environment)
+        if !urls.isEmpty {
+            model.open(urls)
         }
         _model = State(initialValue: model)
     }

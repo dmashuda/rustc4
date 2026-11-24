@@ -27,6 +27,110 @@ final class C4UITests: XCTestCase {
         XCTAssertFalse(model.svg().hasPrefix("<svg"))
     }
 
+    func testFilesTheModelNamesAreReadWithIt() throws {
+        let folder = try temporaryDirectory()
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try "specification { element box } model { a = box 'A' { descriptionFile ./docs/a.md; icon ./a.svg } }"
+            .write(to: folder.appendingPathComponent("m.c4"), atomically: true, encoding: .utf8)
+        let text = folder.appendingPathComponent("docs/a.md")
+        try "What A does.".write(to: text, atomically: true, encoding: .utf8)
+        try "<svg xmlns='http://www.w3.org/2000/svg'/>"
+            .write(to: folder.appendingPathComponent("a.svg"), atomically: true, encoding: .utf8)
+        try "Nobody names this.".write(to: folder.appendingPathComponent("docs/other.md"), atomically: true, encoding: .utf8)
+
+        let model = C4Model()
+        model.open([folder], watching: false)
+        XCTAssertEqual(model.screen.problems.map(\.text), [])
+        XCTAssertEqual(model.screen.diagram?.nodes.first?.icon?.href.hasPrefix("data:image/svg+xml;base64,"), true)
+        model.tap("node.a")
+        XCTAssertEqual(model.screen.details?.description, "What A does.")
+
+        // A file the model names is followed like the model's own.
+        try "What A does now.".write(to: text, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: text.path)
+        model.reloadIfChanged()
+        XCTAssertEqual(model.screen.details?.description, "What A does now.")
+    }
+
+    func testPathsOnTheCommandLineAreMeantFromWhereItWasTyped() {
+        // As `bazel run //apps/macos:rustc4 -- examples/library` gives them.
+        let urls = C4Model.urls(
+            forArguments: ["examples/library", "-NSDocumentRevisionsDebugMode", "/tmp/other.c4", "../up"],
+            environment: ["BUILD_WORKING_DIRECTORY": "/Users/me/rustc4"])
+        XCTAssertEqual(urls.map(\.path), ["/Users/me/rustc4/examples/library", "/tmp/other.c4", "/Users/me/up"])
+        // Started any other way, from wherever it was started.
+        let here = FileManager.default.currentDirectoryPath
+        XCTAssertEqual(C4Model.urls(forArguments: ["a.c4"], environment: [:]).map(\.path), [here + "/a.c4"])
+    }
+
+    /// Everything a diagram can hold, drawn by this renderer: a picture of
+    /// it is left with the test's outputs, to compare with the same model
+    /// from `rustc4 export png`.
+    func testEveryKindOfThingDraws() throws {
+        let folder = try temporaryDirectory()
+        try """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#fde047"/></svg>
+        """.write(to: folder.appendingPathComponent("dot.svg"), atomically: true, encoding: .utf8)
+        try """
+        specification {
+          element person { notation 'A person' style { shape person; color green } }
+          element service { notation 'A service' style { icon ./dot.svg } }
+          element store { notation 'A store' style { shape storage; icon ./dot.svg; iconPosition top } }
+          element note { style { border none; color muted } }
+          relationship has { notation 'One has many' line solid; head crow }
+          relationship feed { notation 'Overnight' line dotted; head vee }
+        }
+        model {
+          user = person 'User'
+          app = service 'App' 'Does the work' 'Rust' { style { multiple true } }
+          big = service 'Big' 'In bigger type' { style { size large; textSize large } }
+          db = store 'Database' 'Keeps it'
+          aside = note 'A note' 'With no border'
+          user -> app 'uses'
+          app -[has]-> db 'rows'
+          app -[feed]-> big 'reports'
+          app <-> user 'talks back'
+        }
+        views { view index { include * } }
+        """.write(to: folder.appendingPathComponent("m.c4"), atomically: true, encoding: .utf8)
+
+        let model = C4Model()
+        model.open([folder], watching: false)
+        XCTAssertEqual(model.screen.problems.map(\.text), [])
+        let diagram = try XCTUnwrap(model.screen.diagram)
+        XCTAssertNotNil(diagram.legend)
+        let data = try XCTUnwrap(C4View.png(of: diagram, scale: 2))
+        if let outputs = ProcessInfo.processInfo.environment["TEST_UNDECLARED_OUTPUTS_DIR"] {
+            try data.write(to: URL(fileURLWithPath: outputs).appendingPathComponent("everything.png"))
+            try model.svg(background: "#ffffff").write(
+                to: URL(fileURLWithPath: outputs).appendingPathComponent("everything.svg"), atomically: true, encoding: .utf8)
+        }
+        let image = try XCTUnwrap(NSBitmapImageRep(data: data))
+        let color = { (x: Double, y: Double) in
+            image.colorAt(x: Int(x * 2), y: Int(y * 2))?.usingColorSpace(.sRGB)
+        }
+        // The icon is drawn: yellow in the middle of where it goes.
+        let icon = try XCTUnwrap(diagram.nodes.first { $0.id == "app" }?.icon)
+        let middle = try XCTUnwrap(color(icon.x + icon.width / 2, icon.y + icon.height / 2))
+        XCTAssertGreaterThan(middle.redComponent, 0.8)
+        XCTAssertLessThan(middle.blueComponent, 0.5)
+        // The one behind a stack shows past the corner of the one in front.
+        let app = try XCTUnwrap(diagram.nodes.first { $0.id == "app" })
+        let behind = try XCTUnwrap(color(app.x + app.width + 4, app.y + app.height + 4))
+        XCTAssertGreaterThan(behind.alphaComponent, 0.9)
+        // A box with no border is its fill right to the edge; one with a
+        // border is darker there.
+        let note = try XCTUnwrap(diagram.nodes.first { $0.id == "aside" })
+        let edge = try XCTUnwrap(color(note.x + note.width / 2, note.y + 0.5))
+        let inside = try XCTUnwrap(color(note.x + note.width / 2, note.y + 6))
+        XCTAssertEqual(edge.blueComponent, inside.blueComponent, accuracy: 0.05)
+        // And the legend's frame is there, under the drawing.
+        let legend = try XCTUnwrap(diagram.legend)
+        let sample = try XCTUnwrap(legend.nodes.first)
+        let inSample = try XCTUnwrap(color(sample.x + sample.width / 2, sample.y + sample.height - 6))
+        XCTAssertGreaterThan(inSample.alphaComponent, 0.9)
+    }
+
     func testAFolderIsReadAndFollowed() throws {
         let folder = try temporaryDirectory()
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)

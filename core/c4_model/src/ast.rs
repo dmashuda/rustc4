@@ -90,6 +90,8 @@ pub struct ElementDef {
     pub title: Option<String>,
     pub description: Option<String>,
     pub summary: Option<String>,
+    /// `descriptionFile ./a.md`: where its description is kept instead.
+    pub description_file: Option<(String, Span)>,
     pub technology: Option<String>,
     pub notation: Option<String>,
     pub tags: Vec<String>,
@@ -116,6 +118,8 @@ pub struct RelationDef {
     pub notation: Option<String>,
     /// Written `a <-> b`: it goes both ways.
     pub both: bool,
+    /// (url, title)
+    pub links: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,8 +207,9 @@ pub enum Predicate {
         cond: Option<Condition>,
         with: StyleProps,
     },
-    /// With `where`, only relationships it holds for count.
-    Relation(RelExpr, Option<Condition>),
+    /// With `where`, only relationships it holds for count. The third is
+    /// what `with { }` says of the lines it draws, in just this view.
+    Relation(RelExpr, Option<Condition>, StyleProps),
 }
 
 /// What comes after `where`: `kind is service and not (tag is #old)`.

@@ -24,7 +24,7 @@ A layout change cannot be judged from tests alone: export the examples as
 PNG and look at them. (`examples` holds separate models, so that command
 reports what more than one of them defines and exits 1; every view is
 still written. `examples/delivery` is the one with icons, sizes and
-stacks.)
+stacks; `examples/library` the one with every kind of line.)
 
 ## Architecture rules
 
@@ -73,8 +73,10 @@ One Rust core, thin bindings, renderers that only draw.
 - **An icon is a URL in the `Diagram`**, with the rectangle to draw it
   in: `https:` for a renderer to fetch, or `data:` holding an SVG file the
   source named. Such a file is one more `Source` (named `.svg`, not read
-  as a model); `Workspace::wanted` lists those not given, for whoever
-  reads files to read and give. The core never touches the file system.
+  as a model), as is the text of a `descriptionFile` (`.md`, `.txt`);
+  `Workspace::wanted` (`C4Ui::wanted`) lists those not given, for whoever
+  reads files to read and give: the CLI and the macOS app do. The core
+  never touches the file system.
 - **A legend is part of the `Diagram`** (`Diagram::legend`), under the
   drawing and inside its width and height, whenever the view shows
   something whose kind has a `notation`, unless it is turned off

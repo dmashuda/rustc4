@@ -50,6 +50,7 @@ pub enum LineStyle {
     Solid,
     Dashed,
     Dotted,
+    Hidden,
 }
 
 #[uniffi::remote(Enum)]
@@ -315,6 +316,12 @@ impl C4Ui {
 
     /// The showing diagram as SVG, for saving: empty when there is none.
     /// `background`: a color to paint behind it, or `None` for transparent.
+    /// Files the sources name that are not among them: see
+    /// `c4_ui::C4Ui::wanted`.
+    pub fn wanted(&self) -> Vec<String> {
+        self.inner.lock().unwrap().wanted().to_vec()
+    }
+
     pub fn svg(&self, background: Option<String>) -> String {
         match self.inner.lock().unwrap().diagram() {
             Some(diagram) => c4_render::svg(diagram, &c4_render::SvgOptions { background }),
