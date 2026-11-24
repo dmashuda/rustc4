@@ -42,8 +42,19 @@ thin bindings, renderers that only draw.
   the top of `core/c4_ui/src/lib.rs`, or hold state about what is showing.
   What stays platform-side: styling of the chrome, pan and zoom, the address
   bar, where the playground's source is kept, turning a diagram into a file.
+- **Questions about the model live in `core/c4_query`** and answer in text;
+  `rustc4 query` and the MCP server (`cli/src/mcp.rs`) are two ways of
+  asking the same ones. A new MCP tool is a function there, a `Question`
+  variant, and an entry in `tools()`. Answers stay short (`MAX_LINES`) and
+  name every element by its full name.
+- **A model may come from many repositories.** Nothing may assume one file
+  or one specification: names and view ids are global, identical kind
+  specifications may repeat, and every element and relationship keeps its
+  `Origin`. `Model::views` are the written views; `generated_views` (one per
+  element with children and no written view) are reachable but not listed.
 - **Ids are API.** `view.<id>`, `node.<fqn>`, `open.<fqn>`,
-  `edge.<source>-><target>`, `back`, `canvas`, `details.close`, `file.<n>`.
+  `edge.<source>-><target>`, `back`, `canvas`, `details.close`, `file.<n>`,
+  `file.add`, `file.remove`.
   Tests address things by them.
 - `c4_model` has no dependencies. `c4_layout` adds only serde (the Diagram
   serializes itself). Neither may depend on a font, a clock, the file system

@@ -144,6 +144,7 @@ impl Model {
                 navigate_to: self
                     .views
                     .iter()
+                    .chain(&self.generated_views)
                     .find(|v| v.of == Some(i) && v.id != view.id)
                     .map(|v| v.id.clone()),
             };
@@ -640,8 +641,14 @@ mod tests {
             .map(|r| (ws.model.elements[r.source].fqn.as_str(), ws.model.elements[r.target].fqn.as_str()))
             .collect();
         assert_eq!(ends, [("a.inner", "b.other"), ("a.extra", "a.inner")]);
-        // No views written: a landscape is there anyway.
+        // No views written: a landscape is there anyway, and a way into
+        // each element that has something inside.
         assert_eq!(ws.model.view_ids(), ["index"]);
+        let landscape = ws.model.compute_view("index").unwrap();
+        assert_eq!(landscape.nodes[0].navigate_to.as_deref(), Some("a"));
+        let inside: Vec<_> = ws.model.compute_view("a").unwrap().nodes.iter().map(|n| n.id.clone()).collect();
+        assert_eq!(inside, ["a", "a.inner", "b", "a.extra"]);
+        assert_eq!(ws.model.compute_view("a").unwrap().title, "a");
     }
 
     #[test]
@@ -667,6 +674,27 @@ mod tests {
         assert_eq!(a.title, "A");
         assert_eq!(a.description, "First line\nand the second\n\nafter a gap");
         assert_eq!(ws.model.element("b").unwrap().title, "b", "an empty title is no title");
+    }
+
+    #[test]
+    fn files_may_repeat_a_specification_but_not_contradict_it() {
+        let file = |name: &str, text: &str| Source { name: name.into(), text: text.into() };
+        let spec =
+            "specification { element box { style { color green } } relationship async { line dotted } }";
+        let ws = load(&[
+            file("one/a.c4", &format!("{spec} model {{ a = box }}")),
+            file("two/b.c4", &format!("{spec} model {{ b = box; b -[async]-> a }}")),
+            file("three/c.c4", "specification { element box { style { color red } } }"),
+        ]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.to_string()).collect();
+        assert_eq!(
+            messages,
+            ["three/c.c4:1:17: error: The element kind 'box' is specified twice, and differently."]
+        );
+        assert_eq!(ws.model.relations.len(), 1);
+        // Each remembers the file it was written in.
+        assert_eq!(ws.model.element("b").unwrap().origin.to_string(), "two/b.c4:1");
+        assert_eq!(ws.model.relations[0].origin.file, "two/b.c4");
     }
 
     #[test]

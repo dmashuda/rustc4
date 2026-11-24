@@ -61,6 +61,67 @@ source to edit; **Open…** (⌘O), dropping a folder on the window, or a path o
 the command line shows a model from disk instead, and the window then follows
 the files as you save them from whatever editor you use.
 
+## One model from many repositories
+
+Keep each system's `.c4` files in its own repository, and read them all as
+one model. Every command takes several paths, so with the repositories
+checked out side by side:
+
+```bash
+rustc4 check  repos/*/architecture              # one model, checked as a whole
+rustc4 bundle repos/*/architecture -o org.json  # ...gathered into one file
+rustc4 build  org.json -o site                  # ...and a site of all of it
+```
+
+A bundle is the sources in one file; every command reads one wherever it
+reads a directory. What makes the pieces fit:
+
+- **Names are global.** `payments.api -> ledger.api` in one repository means
+  the `ledger.api` another defines. Two repositories defining the same
+  element is an error naming both files; adding to another's element is
+  `extend ledger { ... }`.
+- **Specifications may repeat.** Each repository can carry the element kinds
+  it is checked against; the same kind specified the same way twice is fine,
+  two that disagree is an error.
+- **Everything remembers where it was written**, file and line, so from any
+  box there is a way back to the repository that owns it.
+- **View ids are global too**, so only one place should define `index`.
+
+Every element with something inside it can be gone into, whether or not
+anyone wrote a view of it: the landscape shows the top level, a click on a
+system shows its services, a click on a service its components. Selecting a
+box fades everything it is not connected to, which is what makes a crowded
+view readable.
+
+A hundred services side by side at the top level lay out in milliseconds,
+but no drawing of a hundred boxes and their lines is easy to read. Group them
+(`payments = domain { ledger = service ... }`): the landscape then shows a
+dozen domains, each a click away from its services.
+
+## For language models: MCP
+
+`rustc4 mcp <path>...` serves the model over the
+[Model Context Protocol](https://modelcontextprotocol.io) on stdio, so an
+assistant can ask what exists and what depends on what instead of guessing.
+It re-reads the files when they change.
+
+```bash
+claude mcp add architecture -- /path/to/rustc4 mcp /path/to/org.json
+```
+
+| Tool | Answers |
+| --- | --- |
+| `overview` | What is in the model: counts, kinds, the top level |
+| `search` | "What handles refunds?" Elements by name, description, technology, tag; relationships by what they say |
+| `element` | One element in full: what it is, the file it is written in, what it contains, uses and is used by |
+| `neighbors` | Dependencies out to several steps, either way: "what breaks if this changes?" |
+| `path` | "How does the mobile app reach the ledger?" |
+| `views`, `view` | A diagram as text: its boxes, nested, and its lines |
+
+Answers are short text that names every element in full, so one answer leads
+to the next question. The same questions work at the command line:
+`rustc4 query org.json -- used-by ledger.api 3`.
+
 ## How it is put together
 
 The architecture is [med-log](https://github.com/dmashuda/med-log)'s: a Bazel
@@ -73,12 +134,13 @@ core/c4_layout    Rust: a computed view -> a Diagram. Sizes boxes from their
                   text, lays them out, routes the lines. No font, no platform.
 core/c4_render    Rust: a Diagram -> SVG text.
 core/c4_ui        Rust: the viewer as a state machine. A Screen out, taps in.
+core/c4_query     Rust: questions about a model, answered in text.
 bindings/wasm     wasm-bindgen wrapper of c4_ui -> JS/TS (web)
 bindings/uniffi   UniFFI wrapper of c4_ui      -> Swift (Apple)
 apps/web          renderer: TypeScript + esbuild. Draws the Screen, pans and zooms.
 apps/apple/C4UI   renderer: SwiftUI. Draws the Screen, and the Diagram in a Canvas.
 apps/macos        macos_application
-cli               Rust: check, export (SVG, PNG, JSON), build (static site)
+cli               Rust: check, export, build (static site), bundle, query, mcp
 examples          models to try
 tools/, bazel/    toolchains, from med-log
 ```

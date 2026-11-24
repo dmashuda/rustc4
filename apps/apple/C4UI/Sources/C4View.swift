@@ -88,7 +88,10 @@ public struct C4View: View {
 
     @ViewBuilder private var stage: some View {
         if let diagram = screen.diagram, screen.empty.isEmpty {
-            DiagramCanvas(diagram: diagram, selected: screen.selected, controls: screen.controls, onTap: model.tap)
+            DiagramCanvas(
+                diagram: diagram, selected: screen.selected, related: screen.related, controls: screen.controls,
+                onTap: model.tap
+            )
                 .background(Color(nsOrUIColor: .textBackgroundColor))
         } else {
             Text(screen.empty)

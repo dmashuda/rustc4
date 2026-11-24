@@ -351,6 +351,14 @@ button {
   fill: var(--accent);
 }
 
+.world [data-faded="true"] {
+  opacity: 0.18;
+}
+
+.world g[data-id] {
+  transition: opacity 0.12s;
+}
+
 .world .open {
   cursor: zoom-in;
 }

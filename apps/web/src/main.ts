@@ -36,6 +36,7 @@ type Screen = {
   back: Item | null;
   empty: string;
   selected: string;
+  related: string[];
   details: Details | null;
   exports: Export[];
   problemsTitle: string;
@@ -368,13 +369,14 @@ function drawDiagram(screen: Screen) {
     userMoved = false;
     fit();
   }
-  const [kind, ...rest] = screen.selected.split(".");
-  const selected = rest.join(".");
+  // What is selected, and with it everything not connected to it faded.
+  const related = new Set(screen.related);
   for (const group of world.querySelectorAll<SVGGElement>("g[data-id]")) {
-    const isNode = group.classList.contains("node");
-    const on = selected !== "" && group.dataset.id === selected && (kind === "node") === isNode;
-    if (on) group.dataset.selected = "true";
+    const id = `${group.classList.contains("node") ? "node" : "edge"}.${group.dataset.id}`;
+    if (id === screen.selected) group.dataset.selected = "true";
     else delete group.dataset.selected;
+    if (related.size > 0 && !related.has(id)) group.dataset.faded = "true";
+    else delete group.dataset.faded;
   }
   const empty = $("empty");
   empty.hidden = screen.empty === "";

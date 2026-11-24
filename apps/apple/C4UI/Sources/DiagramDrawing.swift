@@ -22,15 +22,36 @@ struct DiagramDrawing {
     let diagram: Diagram
     /// A tap id, `node.<id>` or `edge.<id>`, or empty.
     let selected: String
+    /// With a selection: the ids of everything connected to it. The rest
+    /// is drawn faded. Empty: nothing is.
+    var related: Set<String> = []
     let accent: Color
 
+    /// A context to draw the thing with this id in: faded if it is not
+    /// part of what is selected.
+    private func context(for id: String, from context: GraphicsContext) -> GraphicsContext {
+        var copy = context
+        if !related.isEmpty, !related.contains(id) { copy.opacity = 0.18 }
+        return copy
+    }
+
     func draw(in context: inout GraphicsContext) {
-        for node in diagram.nodes where node.group { draw(node, in: &context) }
-        for edge in diagram.edges { draw(edge, in: &context) }
-        for node in diagram.nodes where !node.group { draw(node, in: &context) }
+        for node in diagram.nodes where node.group {
+            var faded = self.context(for: "node.\(node.id)", from: context)
+            draw(node, in: &faded)
+        }
         for edge in diagram.edges {
+            var faded = self.context(for: "edge.\(edge.id)", from: context)
+            draw(edge, in: &faded)
+        }
+        for node in diagram.nodes where !node.group {
+            var faded = self.context(for: "node.\(node.id)", from: context)
+            draw(node, in: &faded)
+        }
+        for edge in diagram.edges {
+            var faded = self.context(for: "edge.\(edge.id)", from: context)
             let on = selected == "edge.\(edge.id)"
-            for label in edge.labels { draw(label, in: &context, color: on ? accent : nil) }
+            for label in edge.labels { draw(label, in: &faded, color: on ? accent : nil) }
         }
     }
 
