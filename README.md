@@ -9,7 +9,7 @@ written once, in Rust, and compiled to each place it runs.
 [![CI](https://github.com/dmashuda/rustc4/actions/workflows/ci.yml/badge.svg)](https://github.com/dmashuda/rustc4/actions/workflows/ci.yml)
 
 > **Status: early.** The language, the command line and the `Diagram` format
-> may still change, and there are no releases yet: you build it from source.
+> may still change between releases.
 > rustc4 is an independent project, not affiliated with LikeC4; it reads the
 > same language, less [what is not there yet](#the-language).
 
@@ -64,7 +64,24 @@ bazel test //...
 one, as above. (Given all of `examples`, they are read as one model, which
 is what a directory means, and what more than one defines is reported.)
 
-To have `rustc4` as a command, build it once and put it on your `PATH`:
+To have `rustc4` as a command, take it from a
+[release](https://github.com/dmashuda/rustc4/releases) (Linux x86_64 and
+aarch64, macOS arm64) and put it on your `PATH`:
+
+```bash
+tar -xzf rustc4-v0.1.0-linux-x86_64.tar.gz
+cp rustc4-v0.1.0-linux-x86_64/rustc4 ~/.local/bin/
+```
+
+Each archive carries a signed attestation of where it was built. To check
+that a download is the one this repository's release workflow made, from
+the commit it says:
+
+```bash
+gh attestation verify rustc4-v0.1.0-linux-x86_64.tar.gz --repo dmashuda/rustc4
+```
+
+Or build it:
 
 ```bash
 bazel build --config=release //cli
@@ -260,6 +277,20 @@ why layout must be deterministic, what a new field touches) are in
 [CLAUDE.md](CLAUDE.md), which is written for coding assistants and reads as
 well for people. A change to the layout cannot be judged from tests alone:
 export the examples as PNG and look at them.
+
+### Releasing
+
+A release is a version tag on a commit that is on `main`:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` checks the tag is on `main`, builds the
+CLI for each platform, attests the archives and publishes them. A tag with
+a suffix (`v0.2.0-rc.1`) is published as a pre-release. Run from the
+Actions tab instead, it builds the same archives and publishes nothing,
+which is the way to try a change to it.
 
 ## License
 
