@@ -12,7 +12,9 @@
 
 use std::sync::Mutex;
 
-use c4_layout::{Anchor, Diagram, Edge, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole};
+use c4_layout::{
+    Anchor, Diagram, Edge, Icon, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
+};
 use c4_model::Source;
 use c4_ui::{Controls, Details, Editor, Export, ExportKind, Item, Link, Problem, Screen, Section};
 
@@ -78,6 +80,15 @@ pub struct Label {
 }
 
 #[uniffi::remote(Record)]
+pub struct Icon {
+    pub href: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[uniffi::remote(Record)]
 pub struct Node {
     pub id: String,
     pub parent: Option<String>,
@@ -94,6 +105,8 @@ pub struct Node {
     pub stroke: String,
     pub fill_opacity: f64,
     pub border: LineStyle,
+    pub behind: Vec<Point>,
+    pub icon: Option<Icon>,
     pub labels: Vec<Label>,
     pub navigate_to: Option<String>,
 }

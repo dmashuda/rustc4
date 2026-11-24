@@ -13,8 +13,8 @@ mod view;
 
 pub use ast::Direction;
 pub use model::{
-    Arrow, Diagnostic, Element, ElementStyle, Line, Model, Origin, Relation, RelationStyle, Severity, Shape,
-    Source, View, Workspace, load,
+    Arrow, Diagnostic, Element, ElementStyle, IconPosition, Line, Model, Origin, Relation, RelationStyle,
+    Severity, Shape, Size, Source, View, Workspace, load,
 };
 pub use view::{ComputedView, ViewEdge, ViewNode};
 

@@ -26,6 +26,8 @@ struct DiagramDrawing {
     /// is drawn faded. Empty: nothing is.
     var related: Set<String> = []
     let accent: Color
+    /// The images of the diagram's icons that are to hand, by `href`.
+    var icons: [String: Image] = [:]
 
     /// A context to draw the thing with this id in: faded if it is not
     /// part of what is selected.
@@ -89,56 +91,75 @@ struct DiagramDrawing {
                 context.fill(path, with: .color(fill))
                 context.stroke(path, with: .color(edge), style: line)
             }
-            let (x, y, w, h) = (rect.minX, rect.minY, rect.width, rect.height)
-            switch node.shape {
-            case .rectangle:
-                filled(Path(roundedRect: rect, cornerRadius: 6))
-            case .person:
-                // Shoulders, then a head overlapping them.
-                filled(Path(roundedRect: CGRect(x: x, y: y + 24, width: w, height: h - 24), cornerRadius: 18))
-                filled(Path(ellipseIn: CGRect(x: rect.midX - 19, y: y + 0.75, width: 38, height: 38)))
-            case .browser:
-                let frame = Path(roundedRect: rect, cornerRadius: 6)
-                context.fill(frame, with: .color(Color(hex: node.stroke)))
-                context.stroke(frame, with: .color(edge), style: line)
-                let page = CGRect(x: x + 4, y: y + 22, width: w - 8, height: h - 26)
-                context.fill(Path(roundedRect: page, cornerRadius: 3), with: .color(fill))
-                for i in 0..<3 {
-                    let dot = CGRect(x: x + 9.5 + 12 * CGFloat(i), y: y + 7.5, width: 7, height: 7)
-                    context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.55)))
+            func shape(in rect: CGRect) {
+                let (x, y, w, h) = (rect.minX, rect.minY, rect.width, rect.height)
+                switch node.shape {
+                case .rectangle:
+                    filled(Path(roundedRect: rect, cornerRadius: 6))
+                case .person:
+                    // Shoulders, then a head overlapping them.
+                    filled(Path(roundedRect: CGRect(x: x, y: y + 24, width: w, height: h - 24), cornerRadius: 18))
+                    filled(Path(ellipseIn: CGRect(x: rect.midX - 19, y: y + 0.75, width: 38, height: 38)))
+                case .browser:
+                    let frame = Path(roundedRect: rect, cornerRadius: 6)
+                    context.fill(frame, with: .color(Color(hex: node.stroke)))
+                    context.stroke(frame, with: .color(edge), style: line)
+                    let page = CGRect(x: x + 4, y: y + 22, width: w - 8, height: h - 26)
+                    context.fill(Path(roundedRect: page, cornerRadius: 3), with: .color(fill))
+                    for i in 0..<3 {
+                        let dot = CGRect(x: x + 9.5 + 12 * CGFloat(i), y: y + 7.5, width: 7, height: 7)
+                        context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.55)))
+                    }
+                case .mobile:
+                    let frame = Path(roundedRect: rect, cornerRadius: 10)
+                    context.fill(frame, with: .color(Color(hex: node.stroke)))
+                    context.stroke(frame, with: .color(edge), style: line)
+                    let display = CGRect(x: x + 10, y: y + 5, width: w - 32, height: h - 10)
+                    context.fill(Path(roundedRect: display, cornerRadius: 4), with: .color(fill))
+                    let button = CGRect(x: rect.maxX - 16, y: rect.midY - 5, width: 10, height: 10)
+                    context.fill(Path(ellipseIn: button), with: .color(fill))
+                case .cylinder, .storage:
+                    // The base, the sides, then the lid on top.
+                    let ry: CGFloat = 10
+                    filled(Path(ellipseIn: CGRect(x: x, y: rect.maxY - 2 * ry, width: w, height: 2 * ry)))
+                    context.fill(Path(CGRect(x: x, y: y + ry, width: w, height: h - 2 * ry)), with: .color(fill))
+                    var sides = Path()
+                    sides.move(to: CGPoint(x: x, y: y + ry))
+                    sides.addLine(to: CGPoint(x: x, y: rect.maxY - ry))
+                    sides.move(to: CGPoint(x: rect.maxX, y: y + ry))
+                    sides.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - ry))
+                    context.stroke(sides, with: .color(edge), style: line)
+                    filled(Path(ellipseIn: CGRect(x: x, y: y, width: w, height: 2 * ry)))
+                case .queue:
+                    // The same, on its side: the open end is on the right.
+                    let rx: CGFloat = 10
+                    filled(Path(ellipseIn: CGRect(x: x, y: y, width: 2 * rx, height: h)))
+                    context.fill(Path(CGRect(x: x + rx, y: y, width: w - 2 * rx, height: h)), with: .color(fill))
+                    var sides = Path()
+                    sides.move(to: CGPoint(x: x + rx, y: y))
+                    sides.addLine(to: CGPoint(x: rect.maxX - rx, y: y))
+                    sides.move(to: CGPoint(x: x + rx, y: rect.maxY))
+                    sides.addLine(to: CGPoint(x: rect.maxX - rx, y: rect.maxY))
+                    context.stroke(sides, with: .color(edge), style: line)
+                    filled(Path(ellipseIn: CGRect(x: rect.maxX - 2 * rx, y: y, width: 2 * rx, height: h)))
                 }
-            case .mobile:
-                let frame = Path(roundedRect: rect, cornerRadius: 10)
-                context.fill(frame, with: .color(Color(hex: node.stroke)))
-                context.stroke(frame, with: .color(edge), style: line)
-                let display = CGRect(x: x + 10, y: y + 5, width: w - 32, height: h - 10)
-                context.fill(Path(roundedRect: display, cornerRadius: 4), with: .color(fill))
-                let button = CGRect(x: rect.maxX - 16, y: rect.midY - 5, width: 10, height: 10)
-                context.fill(Path(ellipseIn: button), with: .color(fill))
-            case .cylinder, .storage:
-                // The base, the sides, then the lid on top.
-                let ry: CGFloat = 10
-                filled(Path(ellipseIn: CGRect(x: x, y: rect.maxY - 2 * ry, width: w, height: 2 * ry)))
-                context.fill(Path(CGRect(x: x, y: y + ry, width: w, height: h - 2 * ry)), with: .color(fill))
-                var sides = Path()
-                sides.move(to: CGPoint(x: x, y: y + ry))
-                sides.addLine(to: CGPoint(x: x, y: rect.maxY - ry))
-                sides.move(to: CGPoint(x: rect.maxX, y: y + ry))
-                sides.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - ry))
-                context.stroke(sides, with: .color(edge), style: line)
-                filled(Path(ellipseIn: CGRect(x: x, y: y, width: w, height: 2 * ry)))
-            case .queue:
-                // The same, on its side: the open end is on the right.
-                let rx: CGFloat = 10
-                filled(Path(ellipseIn: CGRect(x: x, y: y, width: 2 * rx, height: h)))
-                context.fill(Path(CGRect(x: x + rx, y: y, width: w - 2 * rx, height: h)), with: .color(fill))
-                var sides = Path()
-                sides.move(to: CGPoint(x: x + rx, y: y))
-                sides.addLine(to: CGPoint(x: rect.maxX - rx, y: y))
-                sides.move(to: CGPoint(x: x + rx, y: rect.maxY))
-                sides.addLine(to: CGPoint(x: rect.maxX - rx, y: rect.maxY))
-                context.stroke(sides, with: .color(edge), style: line)
-                filled(Path(ellipseIn: CGRect(x: rect.maxX - 2 * rx, y: y, width: 2 * rx, height: h)))
+            }
+            // A stack: the ones behind first.
+            for corner in node.behind {
+                shape(in: CGRect(x: corner.x, y: corner.y, width: node.width, height: node.height))
+            }
+            shape(in: rect)
+        }
+        if let icon = node.icon, let image = icons[icon.href] {
+            // Whole and undistorted, in the middle of where it goes.
+            let resolved = context.resolve(image)
+            let (w, h) = (resolved.size.width, resolved.size.height)
+            if w > 0, h > 0 {
+                let scale = min(icon.width / w, icon.height / h)
+                let fitted = CGRect(
+                    x: icon.x + (icon.width - w * scale) / 2, y: icon.y + (icon.height - h * scale) / 2,
+                    width: w * scale, height: h * scale)
+                context.draw(resolved, in: fitted)
             }
         }
         for label in node.labels { draw(label, in: &context, color: nil) }

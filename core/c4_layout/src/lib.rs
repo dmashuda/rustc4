@@ -10,9 +10,11 @@ pub mod theme;
 
 use std::collections::BTreeMap;
 
-use c4_model::{Arrow, ComputedView, Direction, Line, ViewNode};
+use c4_model::{Arrow, ComputedView, Direction, IconPosition, Line, Size, ViewNode};
 
-pub use diagram::{Anchor, Diagram, Edge, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole};
+pub use diagram::{
+    Anchor, Diagram, Edge, Icon, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
+};
 pub use text::FONT_FAMILY;
 
 const TITLE_SIZE: f64 = 15.0;
@@ -33,14 +35,75 @@ const EDGE_LABEL_LINE: f64 = 15.0;
 const EDGE_TECH_SIZE: f64 = 10.5;
 const EDGE_LABEL_MAX: f64 = 150.0;
 
+/// How far behind and to the side each further one of a stack shows.
+const STACK: f64 = 8.0;
+
+/// What `size` multiplies a box's least width and height by, `padding` the
+/// room around its words, and `textSize` its type.
+fn size_scale(size: Size) -> f64 {
+    match size {
+        Size::XSmall => 0.6,
+        Size::Small => 0.8,
+        Size::Medium => 1.0,
+        Size::Large => 1.3,
+        Size::XLarge => 1.6,
+    }
+}
+
+fn padding_scale(size: Size) -> f64 {
+    match size {
+        Size::XSmall => 0.5,
+        Size::Small => 0.75,
+        Size::Medium => 1.0,
+        Size::Large => 1.5,
+        Size::XLarge => 2.0,
+    }
+}
+
+fn text_scale(size: Size) -> f64 {
+    match size {
+        Size::XSmall => 0.75,
+        Size::Small => 0.875,
+        Size::Medium => 1.0,
+        Size::Large => 1.2,
+        Size::XLarge => 1.45,
+    }
+}
+
+/// Between an icon and the words it is with.
+const ICON_GAP: f64 = 12.0;
+/// Before a group's title: the icon's side, and the gap after it.
+const GROUP_ICON: f64 = 16.0;
+const GROUP_ICON_GAP: f64 = 6.0;
+
+/// The side of the square an icon is drawn in.
+fn icon_side(size: Size) -> f64 {
+    match size {
+        Size::XSmall => 20.0,
+        Size::Small => 28.0,
+        Size::Medium => 36.0,
+        Size::Large => 48.0,
+        Size::XLarge => 64.0,
+    }
+}
+
 /// A box's text, wrapped, and the size the box needs for it.
 struct Sized {
+    /// Of the shape itself: a stack takes `STACK` more each way.
     w: f64,
     h: f64,
+    /// What its type is multiplied by.
+    scale: f64,
     title: Vec<String>,
     technology: String,
     description: Vec<String>,
+    text_w: f64,
     text_h: f64,
+    /// The side of its icon's square, or zero.
+    icon: f64,
+    /// Its words and icon together.
+    content_w: f64,
+    content_h: f64,
     /// Parts of the shape text keeps out of: left, right, top, bottom.
     inset: [f64; 4],
 }
@@ -66,23 +129,34 @@ fn line_of(line: Line) -> LineStyle {
 }
 
 fn size(node: &ViewNode) -> Sized {
-    let title = text::clamp_lines(text::wrap(&node.title, TEXT_MAX, TITLE_SIZE, true), 3);
-    let technology = text::fit(node.technology.trim(), TEXT_MAX, TECH_SIZE, false);
-    let description = text::clamp_lines(text::wrap(&node.description, TEXT_MAX, DESC_SIZE, false), 4);
-    let mut text_h = title.len() as f64 * TITLE_LINE;
+    let (big, pad, scale) = (size_scale(node.size), padding_scale(node.padding), text_scale(node.text_size));
+    // A bigger box, or bigger type, has longer lines before they break.
+    let text_max = TEXT_MAX * big * scale;
+    let title = text::clamp_lines(text::wrap(&node.title, text_max, TITLE_SIZE * scale, true), 3);
+    // The smallest says only what it is called.
+    let terse = node.size == Size::XSmall;
+    let technology = match terse {
+        true => String::new(),
+        false => text::fit(node.technology.trim(), text_max, TECH_SIZE * scale, false),
+    };
+    let description = match terse {
+        true => Vec::new(),
+        false => text::clamp_lines(text::wrap(&node.description, text_max, DESC_SIZE * scale, false), 4),
+    };
+    let mut text_h = title.len() as f64 * TITLE_LINE * scale;
     if !technology.is_empty() {
-        text_h += 2.0 + TECH_LINE;
+        text_h += 2.0 + TECH_LINE * scale;
     }
     if !description.is_empty() {
-        text_h += 6.0 + description.len() as f64 * DESC_LINE;
+        text_h += 6.0 + description.len() as f64 * DESC_LINE * scale;
     }
     let mut text_w: f64 = 0.0;
     for line in &title {
-        text_w = text_w.max(text::width(line, TITLE_SIZE, true));
+        text_w = text_w.max(text::width(line, TITLE_SIZE * scale, true));
     }
-    text_w = text_w.max(text::width(&technology, TECH_SIZE, false));
+    text_w = text_w.max(text::width(&technology, TECH_SIZE * scale, false));
     for line in &description {
-        text_w = text_w.max(text::width(line, DESC_SIZE, false));
+        text_w = text_w.max(text::width(line, DESC_SIZE * scale, false));
     }
     let inset = match node.shape {
         c4_model::Shape::Rectangle => [0.0, 0.0, 0.0, 0.0],
@@ -97,9 +171,28 @@ fn size(node: &ViewNode) -> Sized {
         // A cylinder on its side.
         c4_model::Shape::Queue => [6.0, 22.0, 0.0, 0.0],
     };
-    let w = (text_w + 2.0 * PAD_X).max(MIN_W) + inset[0] + inset[1];
-    let h = (text_h + 2.0 * PAD_Y).max(MIN_H) + inset[2] + inset[3];
-    Sized { w: w.ceil(), h: h.ceil(), title, technology, description, text_h, inset }
+    let icon = if node.icon.is_some() { icon_side(node.icon_size) } else { 0.0 };
+    let (content_w, content_h) = match node.icon_position {
+        _ if icon == 0.0 => (text_w, text_h),
+        IconPosition::Left | IconPosition::Right => (icon + ICON_GAP + text_w, text_h.max(icon)),
+        IconPosition::Top | IconPosition::Bottom => (text_w.max(icon), icon + ICON_GAP + text_h),
+    };
+    let w = (content_w + 2.0 * PAD_X * pad).max(MIN_W * big) + inset[0] + inset[1];
+    let h = (content_h + 2.0 * PAD_Y * pad).max(MIN_H * big) + inset[2] + inset[3];
+    Sized {
+        w: w.ceil(),
+        h: h.ceil(),
+        scale,
+        title,
+        technology,
+        description,
+        text_w,
+        text_h,
+        icon,
+        content_w,
+        content_h,
+        inset,
+    }
 }
 
 /// Lays out a view. `colors` are the model's own (`Model::colors`).
@@ -135,11 +228,16 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
         .map(|(node, sized)| {
             let parent = node.parent.as_deref().and_then(|p| index.get(p).copied());
             match sized {
-                Some(s) => graph::InNode { parent, group: false, w: s.w, h: s.h },
+                Some(s) => {
+                    // Room for the ones behind, so nothing is laid over them.
+                    let behind = if node.multiple { STACK } else { 0.0 };
+                    graph::InNode { parent, group: false, w: s.w + behind, h: s.h + behind }
+                }
                 None => {
                     // Room for at least the start of the title.
                     let title = text::width(&node.title, GROUP_TITLE_SIZE, true).min(TEXT_MAX);
-                    graph::InNode { parent, group: true, w: title + 2.0 * graph::GROUP_PAD, h: 0.0 }
+                    let icon = if node.icon.is_some() { GROUP_ICON + GROUP_ICON_GAP } else { 0.0 };
+                    graph::InNode { parent, group: true, w: icon + title + 2.0 * graph::GROUP_PAD, h: 0.0 }
                 }
             }
         })
@@ -179,7 +277,7 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
     let (placed, lines_down) = if view.sequence {
         sequence::layout(&in_nodes, &in_edges)
     } else {
-        (graph::layout(&in_nodes, &in_edges, view.direction), Vec::new())
+        (graph::layout_spaced(&in_nodes, &in_edges, view.direction, view.rank_gap, view.node_gap), Vec::new())
     };
     let lifelines = view
         .nodes
@@ -205,15 +303,36 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
     };
     let mut nodes = Vec::with_capacity(view.nodes.len());
     for (i, node) in view.nodes.iter().enumerate() {
-        let rect = placed.nodes[i];
+        let mut rect = placed.nodes[i];
+        let mut behind = Vec::new();
+        if node.multiple && sized[i].is_some() {
+            // The one in front is up and to the left; the other shows past
+            // its right and bottom edges.
+            rect.w -= STACK;
+            rect.h -= STACK;
+            behind.push(Point { x: round(rect.x + STACK), y: round(rect.y + STACK) });
+        }
         let swatch = theme::element(&node.color, colors);
         let mut labels = Vec::new();
+        let mut icon = None;
+        let picture = |x: f64, y: f64, side: f64| {
+            node.icon.as_ref().map(|href| Icon {
+                href: href.clone(),
+                x: round(x),
+                y: round(y),
+                width: side,
+                height: side,
+            })
+        };
         let (fill_opacity, stroke);
         match &sized[i] {
             None => {
-                let room = (rect.w - 2.0 * 16.0).max(20.0);
+                // A group's icon is before its title.
+                let before = if node.icon.is_some() { GROUP_ICON + GROUP_ICON_GAP } else { 0.0 };
+                icon = picture(rect.x + 16.0, rect.y + 27.0 - 12.5, GROUP_ICON);
+                let room = (rect.w - 2.0 * 16.0 - before).max(20.0);
                 labels.push(Label {
-                    x: rect.x + 16.0,
+                    x: rect.x + 16.0 + before,
                     y: rect.y + 27.0,
                     text: text::fit(&node.title, room, GROUP_TITLE_SIZE, true),
                     size: GROUP_TITLE_SIZE,
@@ -227,19 +346,45 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
                 stroke = swatch.fill.clone();
             }
             Some(s) => {
-                let cx = rect.x + s.inset[0] + (rect.w - s.inset[0] - s.inset[1]) / 2.0;
-                let mut top = rect.y + s.inset[2] + (rect.h - s.inset[2] - s.inset[3] - s.text_h) / 2.0;
+                // The middle of what the shape leaves for words, and the
+                // words and icon together in the middle of that.
+                let mid_x = rect.x + s.inset[0] + (rect.w - s.inset[0] - s.inset[1]) / 2.0;
+                let mid_y = rect.y + s.inset[2] + (rect.h - s.inset[2] - s.inset[3]) / 2.0;
+                let (left, above) = (mid_x - s.content_w / 2.0, mid_y - s.content_h / 2.0);
+                let (mut cx, mut top) = (mid_x, mid_y - s.text_h / 2.0);
+                if s.icon > 0.0 {
+                    let beside = s.icon + ICON_GAP;
+                    match node.icon_position {
+                        IconPosition::Left => {
+                            icon = picture(left, mid_y - s.icon / 2.0, s.icon);
+                            cx = left + beside + s.text_w / 2.0;
+                        }
+                        IconPosition::Right => {
+                            icon = picture(left + s.text_w + ICON_GAP, mid_y - s.icon / 2.0, s.icon);
+                            cx = left + s.text_w / 2.0;
+                        }
+                        IconPosition::Top => {
+                            icon = picture(mid_x - s.icon / 2.0, above, s.icon);
+                            top = above + beside;
+                        }
+                        IconPosition::Bottom => {
+                            icon = picture(mid_x - s.icon / 2.0, above + s.text_h + ICON_GAP, s.icon);
+                            top = above;
+                        }
+                    }
+                }
                 // (gap above, text, size, line height, bold, color, role)
                 let mut lines: Vec<(f64, &str, f64, f64, bool, &str, TextRole)> = Vec::new();
+                let m = s.scale;
                 for t in &s.title {
-                    lines.push((0.0, t, TITLE_SIZE, TITLE_LINE, true, &swatch.text, TextRole::Title));
+                    lines.push((0.0, t, TITLE_SIZE * m, TITLE_LINE * m, true, &swatch.text, TextRole::Title));
                 }
                 if !s.technology.is_empty() {
                     lines.push((
                         2.0,
                         &s.technology,
-                        TECH_SIZE,
-                        TECH_LINE,
+                        TECH_SIZE * m,
+                        TECH_LINE * m,
                         false,
                         &swatch.text_soft,
                         TextRole::Technology,
@@ -250,8 +395,8 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
                     lines.push((
                         gap,
                         t,
-                        DESC_SIZE,
-                        DESC_LINE,
+                        DESC_SIZE * m,
+                        DESC_LINE * m,
                         false,
                         &swatch.text_soft,
                         TextRole::Description,
@@ -260,10 +405,10 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
                 for (gap, text, size, line_h, bold, color, role) in lines {
                     top += gap;
                     labels.push(Label {
-                        x: cx,
+                        x: round(cx),
                         y: round(top + line_h / 2.0 + size * 0.35),
                         text: text.to_string(),
-                        size,
+                        size: round(size),
                         bold,
                         color: color.to_string(),
                         anchor: Anchor::Middle,
@@ -291,6 +436,8 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
             stroke,
             fill_opacity,
             border: line_of(node.border),
+            behind,
+            icon,
             labels,
             navigate_to: node.navigate_to.clone(),
         });
@@ -694,5 +841,147 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn drawn(source: &str) -> Diagram {
+        let ws = load(&[Source { name: "t.c4".into(), text: source.into() }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        layout(&ws.model.compute_view("index").unwrap(), &ws.model.colors)
+    }
+
+    #[test]
+    fn size_padding_and_text_size_change_the_box() {
+        let d = drawn(
+            "specification { element box }
+            model {
+                plain = box 'Orders' 'Takes an order from basket to doorstep' 'Rust'
+                big = box 'Orders' 'Takes an order from basket to doorstep' 'Rust' { style { size xl } }
+                tiny = box 'Orders' 'Takes an order from basket to doorstep' 'Rust' { style { size xs } }
+                roomy = box 'Orders' 'Takes an order from basket to doorstep' 'Rust' { style { padding xl } }
+                loud = box 'Orders' 'Takes an order from basket to doorstep' 'Rust' { style { textSize xl } }
+            }
+            views { view index { include * } }",
+        );
+        let node = |id: &str| d.nodes.iter().find(|n| n.id == id).unwrap();
+        let (plain, big, tiny, roomy, loud) =
+            (node("plain"), node("big"), node("tiny"), node("roomy"), node("loud"));
+        assert!(big.width > plain.width && big.height > plain.height);
+        assert!(tiny.width < plain.width && tiny.height < plain.height);
+        // The smallest says only its title.
+        assert_eq!(tiny.labels.len(), 1);
+        assert_eq!(tiny.labels[0].role, TextRole::Title);
+        // The same words, the same lines, more room around them.
+        assert_eq!(roomy.labels.len(), plain.labels.len());
+        assert!(roomy.width > plain.width && roomy.height > plain.height);
+        assert_eq!(plain.labels[0].size, TITLE_SIZE);
+        assert_eq!(loud.labels[0].size, 21.75);
+        assert!(loud.height > plain.height);
+        // Text stays inside its box, whatever its size.
+        for n in &d.nodes {
+            for label in &n.labels {
+                let half = text::width(&label.text, label.size, label.bold) / 2.0;
+                assert!(
+                    label.x - half >= n.x && label.x + half <= n.x + n.width,
+                    "{} in {}",
+                    label.text,
+                    n.id
+                );
+                assert!(label.y > n.y && label.y < n.y + n.height);
+            }
+        }
+    }
+
+    #[test]
+    fn a_multiple_is_a_stack_with_room_behind_it() {
+        let d = drawn(
+            "specification { element box }
+            model {
+                one = box 'One'
+                many = box 'Many' { style { multiple true } }
+                next = box 'Next'
+                one -> many
+            }
+            views { view index { include *; autoLayout LeftRight } }",
+        );
+        let node = |id: &str| d.nodes.iter().find(|n| n.id == id).unwrap();
+        let (one, many, next) = (node("one"), node("many"), node("next"));
+        assert!(one.behind.is_empty());
+        // The same size in front; the one behind shows past two edges.
+        assert_eq!((many.width, many.height), (one.width, one.height));
+        assert_eq!(many.behind, [Point { x: many.x + STACK, y: many.y + STACK }]);
+        // Nothing is laid over the one behind.
+        for other in [one, next] {
+            let apart = other.x >= many.x + many.width + STACK
+                || other.x + other.width <= many.x
+                || other.y >= many.y + many.height + STACK
+                || other.y + other.height <= many.y;
+            assert!(apart, "{} over the stack", other.id);
+        }
+    }
+
+    #[test]
+    fn an_icon_has_its_place_beside_the_words() {
+        let d = drawn(
+            "specification { element box; element group }
+            model {
+                none = box 'Orders' 'Takes them'
+                left = box 'Orders' 'Takes them' { icon https://example.com/i.svg }
+                right = box 'Orders' 'Takes them' { icon https://example.com/i.svg; style { iconPosition right } }
+                top = box 'Orders' 'Takes them' { icon https://example.com/i.svg; style { iconPosition top } }
+                bottom = box 'Orders' 'Takes them' { icon https://example.com/i.svg; style { iconPosition bottom; iconSize xl } }
+                outer = group 'Outer' { icon https://example.com/i.svg; inner = box 'Inner' }
+            }
+            views { view index { include *, outer.* } }",
+        );
+        let node = |id: &str| d.nodes.iter().find(|n| n.id == id).unwrap();
+        assert!(node("none").icon.is_none());
+        for id in ["left", "right", "top", "bottom"] {
+            let n = node(id);
+            let icon = n.icon.as_ref().unwrap();
+            assert_eq!(icon.href, "https://example.com/i.svg");
+            assert_eq!(icon.width, if id == "bottom" { 64.0 } else { 36.0 });
+            // Inside the box, and clear of every line of its words.
+            assert!(icon.x >= n.x && icon.x + icon.width <= n.x + n.width, "{id}");
+            assert!(icon.y >= n.y && icon.y + icon.height <= n.y + n.height, "{id}");
+            for label in &n.labels {
+                let half = text::width(&label.text, label.size, label.bold) / 2.0;
+                let (l, r) = (label.x - half, label.x + half);
+                let (t, b) = (label.y - label.size, label.y);
+                let clear =
+                    r <= icon.x || l >= icon.x + icon.width || b <= icon.y || t >= icon.y + icon.height;
+                assert!(clear, "{} under the icon of {id}", label.text);
+                assert!(l >= n.x && r <= n.x + n.width, "{} out of {id}", label.text);
+            }
+        }
+        let words = |id: &str| node(id).labels[0].clone();
+        let icon = |id: &str| node(id).icon.clone().unwrap();
+        assert!(icon("left").x < words("left").x && icon("right").x > words("right").x);
+        assert!(icon("top").y < words("top").y && icon("bottom").y > words("bottom").y);
+        // A group's is before its title.
+        let (outer, mark) = (node("outer"), icon("outer"));
+        assert_eq!((mark.x, mark.width), (outer.x + 16.0, 16.0));
+        assert_eq!(outer.labels[0].x, mark.x + 22.0);
+    }
+
+    #[test]
+    fn auto_layout_can_say_how_far_apart() {
+        let source = |layout: &str| {
+            format!(
+                "specification {{ element box }}
+                model {{ a = box; b = box; c = box; a -> b; a -> c }}
+                views {{ view index {{ include *; {layout} }} }}"
+            )
+        };
+        let d = drawn(&source("autoLayout TopBottom 200 10"));
+        let node = |id: &str| d.nodes.iter().find(|n| n.id == id).unwrap();
+        let (a, b, c) = (node("a"), node("b"), node("c"));
+        assert_eq!(b.y - (a.y + a.height), 200.0);
+        assert_eq!(c.x - (b.x + b.width), 10.0);
+        // Turned: rows are still what the first number is between.
+        let d = drawn(&source("autoLayout LeftRight 200 10"));
+        let node = |id: &str| d.nodes.iter().find(|n| n.id == id).unwrap();
+        let (a, b, c) = (node("a"), node("b"), node("c"));
+        assert_eq!(b.x - (a.x + a.width), 200.0);
+        assert_eq!(c.y - (b.y + b.height), 10.0);
     }
 }

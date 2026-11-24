@@ -50,16 +50,22 @@ struct DiagramCanvas: View {
     let onTap: (String) -> Void
 
     @State private var camera = Camera()
+    @State private var icons = IconStore()
     @State private var size = CGSize.zero
     @State private var dragged = CGSize.zero
 
     var body: some View {
-        GeometryReader { geometry in
+        // Read here, so the canvas is drawn again as each one arrives.
+        let images = icons.images(for: diagram)
+        return GeometryReader { geometry in
             Canvas { context, _ in
                 context.translateBy(x: camera.offset.width, y: camera.offset.height)
                 context.scaleBy(x: camera.scale, y: camera.scale)
-                DiagramDrawing(diagram: diagram, selected: selected, related: Set(related), accent: .accentColor)
-                    .draw(in: &context)
+                DiagramDrawing(
+                    diagram: diagram, selected: selected, related: Set(related), accent: .accentColor,
+                    icons: images
+                )
+                .draw(in: &context)
             }
             .accessibilityIdentifier("diagram")
             .accessibilityLabel(diagram.title)

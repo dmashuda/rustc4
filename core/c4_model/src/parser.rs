@@ -199,9 +199,29 @@ impl Parser {
                     "views" => {
                         self.next();
                         self.opt_string();
+                        self.out.view_styles.push(Vec::new());
                         self.block(Parser::views_item)
                     }
-                    "global" | "deployment" | "likec4lib" | "import" => {
+                    "global" => {
+                        self.next();
+                        self.block(Parser::global_item)
+                    }
+                    // `import { a, b } from 'project'`. Names are global
+                    // here, so there is nothing to bring in: only to check
+                    // that what is named is in the model.
+                    "import" => {
+                        self.next();
+                        let r = self.block(|p| {
+                            let name = p.reference()?;
+                            p.out.imports.push(name);
+                            Ok(())
+                        });
+                        if r.is_ok() && self.eat_word("from") {
+                            self.opt_string();
+                        }
+                        r
+                    }
+                    "deployment" | "likec4lib" => {
                         self.next();
                         self.errors.push(ParseError {
                             span,
@@ -502,6 +522,7 @@ impl Parser {
             technology: None,
             tags: Vec::new(),
             style: StyleProps::default(),
+            metadata: Vec::new(),
         };
         rel.title = self.opt_string();
         if rel.title.is_some() {
@@ -526,7 +547,13 @@ impl Parser {
                     }
                     "metadata" if *p.peek_at(1) == Tok::LBrace => {
                         p.next();
-                        p.skip_block()
+                        p.block(|p| {
+                            let key = p.ident("a metadata key")?;
+                            p.eat(&Tok::Colon);
+                            let value = p.value()?;
+                            rel.metadata.push((key, value));
+                            Ok(())
+                        })
                     }
                     "link" => {
                         p.next();
@@ -560,7 +587,12 @@ impl Parser {
         let span = self.span();
         if self.eat_word("style") {
             let rule = self.style_rule()?;
-            self.out.view_styles.push(rule);
+            self.out.view_styles.last_mut().expect("inside a views block").push(rule);
+            return Ok(());
+        }
+        if self.eat_word("global") {
+            let rule = self.global_rule()?;
+            self.out.view_styles.last_mut().expect("inside a views block").push(rule);
             return Ok(());
         }
         if self.is_word("deployment") {
@@ -583,6 +615,7 @@ impl Parser {
             of: None,
             extends: None,
             span,
+            block: self.out.view_styles.len() - 1,
             title: None,
             description: None,
             tags: Vec::new(),
@@ -644,6 +677,10 @@ impl Parser {
                 let rule = self.style_rule()?;
                 view.rules.push(rule);
             }
+            "global" => {
+                let rule = self.global_rule()?;
+                view.rules.push(rule);
+            }
             "autoLayout" => {
                 let at = self.span();
                 let dir = self.ident("a direction")?;
@@ -661,19 +698,35 @@ impl Parser {
                         );
                     }
                 };
-                // Optional rank and node separation, which the layout here
-                // picks for itself.
-                if matches!(self.peek(), Tok::Num(_)) {
+                // Then, if it says: how far apart rows are, and how far
+                // apart the boxes in a row.
+                let mut gaps = [None, None];
+                for gap in &mut gaps {
+                    if let Tok::Num(text) = self.peek().clone() {
+                        let at = self.span();
+                        self.next();
+                        match text.parse::<f64>() {
+                            Ok(n) if n > 0.0 && n <= 2000.0 => *gap = Some(n),
+                            _ => {
+                                return self.fail(
+                                    at,
+                                    format!("'{text}' is not a distance: use a number of pixels, like 120."),
+                                );
+                            }
+                        }
+                    }
+                }
+                // Lines here are always curves.
+                if self.is_word("ortho") {
                     self.errors.push(ParseError {
                         span: self.span(),
-                        message: "Spacing after autoLayout is not supported yet; the layout picks its own."
-                            .into(),
+                        message: "'ortho' routing is not supported yet; lines are drawn as curves.".into(),
                     });
                 }
-                while matches!(self.peek(), Tok::Num(_)) {
+                if self.is_word("ortho") || self.is_word("spline") {
                     self.next();
                 }
-                view.rules.push(ViewRule::AutoLayout(direction));
+                view.rules.push(ViewRule::AutoLayout { direction, rank_gap: gaps[0], node_gap: gaps[1] });
             }
             _ => {
                 return self.fail(
@@ -829,7 +882,7 @@ impl Parser {
                 Tok::Ident(word) => {
                     !matches!(
                         word.as_str(),
-                        "include" | "exclude" | "style" | "autoLayout" | "title" | "description"
+                        "include" | "exclude" | "style" | "autoLayout" | "title" | "description" | "global"
                     ) || *self.peek_at(1) == Tok::Dot
                 }
                 _ => false,
@@ -845,35 +898,184 @@ impl Parser {
     fn predicate(&mut self) -> Res<Predicate> {
         if self.eat(&Tok::Arrow) {
             let expr = self.element_expr()?;
-            return Ok(Predicate::Relation(if self.eat(&Tok::Arrow) {
-                RelExpr::InOut(expr)
-            } else {
-                RelExpr::Incoming(expr)
-            }));
+            let rel = if self.eat(&Tok::Arrow) { RelExpr::InOut(expr) } else { RelExpr::Incoming(expr) };
+            return Ok(Predicate::Relation(rel, self.opt_where()?));
         }
         let expr = self.element_expr()?;
         if self.eat(&Tok::Arrow) || self.eat(&Tok::BiArrow) {
             let starts_expr = match self.peek() {
                 Tok::Star => true,
-                Tok::Ident(word) => !matches!(word.as_str(), "include" | "exclude" | "style" | "autoLayout"),
+                Tok::Ident(word) => !matches!(
+                    word.as_str(),
+                    "include" | "exclude" | "style" | "autoLayout" | "where" | "with"
+                ),
                 _ => false,
             };
             // `a ->` ends at the end of the line.
             let same_line = self.tokens[self.at].span.line == self.tokens[self.at - 1].span.line;
-            return Ok(Predicate::Relation(if starts_expr && same_line {
+            let rel = if starts_expr && same_line {
                 RelExpr::Direct(expr, self.element_expr()?)
             } else {
                 RelExpr::Outgoing(expr)
-            }));
+            };
+            return Ok(Predicate::Relation(rel, self.opt_where()?));
+        }
+        let at = self.span();
+        let cond = self.opt_where()?;
+        if cond.as_ref().is_some_and(Condition::names_an_end) {
+            return self.fail(
+                at,
+                "'source.' and 'target.' ask about a relationship's ends: use them after a relationship, like '-> a where source.kind is x'.",
+            );
         }
         let mut with = StyleProps::default();
-        if self.is_word("where") {
-            return self.fail(self.span(), "'where' conditions are not supported yet.");
-        }
         if self.eat_word("with") {
             self.block(|p| p.style_prop(&mut with))?;
         }
-        Ok(Predicate::Element { expr, with })
+        Ok(Predicate::Element { expr, cond, with })
+    }
+
+    /// `where kind is service and (tag is #a or tag is not #b)`
+    fn opt_where(&mut self) -> Res<Option<Condition>> {
+        if self.eat_word("where") { Ok(Some(self.cond_or()?)) } else { Ok(None) }
+    }
+
+    fn cond_or(&mut self) -> Res<Condition> {
+        let mut left = self.cond_and()?;
+        while self.eat_word("or") {
+            left = Condition::Or(Box::new(left), Box::new(self.cond_and()?));
+        }
+        Ok(left)
+    }
+
+    fn cond_and(&mut self) -> Res<Condition> {
+        let mut left = self.cond_not()?;
+        while self.eat_word("and") {
+            left = Condition::And(Box::new(left), Box::new(self.cond_not()?));
+        }
+        Ok(left)
+    }
+
+    fn cond_not(&mut self) -> Res<Condition> {
+        if self.eat_word("not") {
+            return Ok(Condition::Not(Box::new(self.cond_not()?)));
+        }
+        if self.eat(&Tok::LParen) {
+            let inner = self.cond_or()?;
+            self.expect(Tok::RParen)?;
+            return Ok(inner);
+        }
+        let at = self.span();
+        let mut word = self.ident("'kind', 'tag' or 'metadata'")?;
+        let mut of = Whose::Own;
+        if matches!(word.as_str(), "source" | "target") && self.eat(&Tok::Dot) {
+            of = if word == "source" { Whose::Source } else { Whose::Target };
+            word = self.ident("'kind', 'tag' or 'metadata'")?;
+        }
+        match word.as_str() {
+            "kind" => {
+                let eq = self.cond_is()?;
+                Ok(Condition::Kind { of, name: self.ident("a kind")?, eq })
+            }
+            "tag" => {
+                let eq = self.cond_is()?;
+                match self.next() {
+                    Tok::Hash(name) => Ok(Condition::Tag { of, name, eq }),
+                    _ => {
+                        self.at -= 1;
+                        self.unexpected("a tag, like '#next'")
+                    }
+                }
+            }
+            "metadata" => {
+                self.expect(Tok::Dot)?;
+                let key = self.ident("a metadata key")?;
+                // Alone, it asks whether the key is there at all.
+                if !(self.is_word("is") || matches!(self.peek(), Tok::Eq | Tok::Ne)) {
+                    return Ok(Condition::Metadata { of, key, value: None, eq: true });
+                }
+                let eq = self.cond_is()?;
+                Ok(Condition::Metadata { of, key, value: Some(self.value()?), eq })
+            }
+            _ => self.fail(
+                at,
+                format!("Expected 'kind', 'tag' or 'metadata' in a 'where' condition, found '{word}'."),
+            ),
+        }
+    }
+
+    /// `is`, `is not`, `==`, `!=`: whether it asks for equal.
+    fn cond_is(&mut self) -> Res<bool> {
+        if self.eat_word("is") {
+            Ok(!self.eat_word("not"))
+        } else if self.eat(&Tok::Eq) {
+            Ok(true)
+        } else if self.eat(&Tok::Ne) {
+            Ok(false)
+        } else {
+            self.unexpected("'is' or 'is not'")
+        }
+    }
+
+    // ---------------------------------------------------------- global --
+
+    /// Inside `global { }`: rules with a name, for views to ask for.
+    fn global_item(&mut self) -> Res<()> {
+        let span = self.span();
+        let word = self.ident("'style', 'styleGroup' or 'predicateGroup'")?;
+        let mut rules = Vec::new();
+        let (name, style) = match word.as_str() {
+            "style" => {
+                let name = self.ident("a name for this style")?;
+                rules.push(self.style_rule()?);
+                (name, true)
+            }
+            "styleGroup" => {
+                let name = self.ident("a name for this group of styles")?;
+                self.block(|p| {
+                    if !p.eat_word("style") {
+                        return p.unexpected("'style'");
+                    }
+                    rules.push(p.style_rule()?);
+                    Ok(())
+                })?;
+                (name, true)
+            }
+            "predicateGroup" | "dynamicPredicateGroup" => {
+                let name = self.ident("a name for this group of predicates")?;
+                self.block(|p| {
+                    let at = p.span();
+                    let word = p.ident("'include' or 'exclude'")?;
+                    match word.as_str() {
+                        "include" => rules.push(ViewRule::Include(p.predicates()?)),
+                        "exclude" => rules.push(ViewRule::Exclude(p.predicates()?)),
+                        _ => return p.fail(at, format!("Expected 'include' or 'exclude', found '{word}'.")),
+                    }
+                    Ok(())
+                })?;
+                (name, false)
+            }
+            _ => {
+                return self.fail(
+                    span,
+                    format!("Expected 'style', 'styleGroup' or 'predicateGroup', found '{word}'."),
+                );
+            }
+        };
+        self.out.globals.push(GlobalDef { name, span, style, rules });
+        Ok(())
+    }
+
+    /// In a view, after `global`: `style name` or `predicate name`.
+    fn global_rule(&mut self) -> Res<ViewRule> {
+        let at = self.span();
+        let what = self.ident("'style' or 'predicate'")?;
+        if !matches!(what.as_str(), "style" | "predicate") {
+            return self.fail(at, format!("Expected 'style' or 'predicate' after 'global', found '{what}'."));
+        }
+        let span = self.span();
+        let name = self.ident("the name a 'global' block gave it")?;
+        Ok(ViewRule::Global { name, style: what == "style", span })
     }
 
     fn element_expr(&mut self) -> Res<ElementExpr> {
@@ -991,12 +1193,12 @@ mod tests {
         assert_eq!(view.of.as_ref().unwrap().text(), "cloud.api");
         let ViewRule::Include(first) = &view.rules[0] else { panic!() };
         assert_eq!(first.len(), 4);
-        assert!(matches!(first[2], Predicate::Relation(RelExpr::InOut(_))));
-        assert!(matches!(first[3], Predicate::Relation(RelExpr::Direct(..))));
+        assert!(matches!(first[2], Predicate::Relation(RelExpr::InOut(_), _)));
+        assert!(matches!(first[3], Predicate::Relation(RelExpr::Direct(..), _)));
         let ViewRule::Exclude(second) = &view.rules[1] else { panic!() };
         assert!(matches!(&second[0], Predicate::Element { expr: ElementExpr::Kind { eq: true, .. }, .. }));
         assert!(matches!(&second[1], Predicate::Element { expr: ElementExpr::Descendants(_), .. }));
-        assert!(matches!(view.rules[3], ViewRule::AutoLayout(Direction::LeftRight)));
+        assert!(matches!(view.rules[3], ViewRule::AutoLayout { direction: Direction::LeftRight, .. }));
         let ViewRule::Style { targets, style } = &view.rules[4] else { panic!() };
         assert_eq!((targets.len(), style.0.len()), (2, 2));
     }

@@ -150,9 +150,25 @@ struct Graph {
     edges: Vec<Edge>,
     /// Node indexes per row, left to right.
     ranks: Vec<Vec<usize>>,
+    /// Between two rows of boxes, and between two boxes in a row.
+    rank_sep: f64,
+    node_sep: f64,
 }
 
+#[cfg(test)]
 pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -> Output {
+    layout_spaced(nodes, edges, direction, None, None)
+}
+
+/// `rank_gap` and `node_gap`: how far apart rows are, and the boxes in a
+/// row, where the view says rather than leaving it to the layout.
+pub(crate) fn layout_spaced(
+    nodes: &[InNode],
+    edges: &[InEdge],
+    direction: Direction,
+    rank_gap: Option<f64>,
+    node_gap: Option<f64>,
+) -> Output {
     let horizontal = matches!(direction, Direction::LeftRight | Direction::RightLeft);
     if nodes.is_empty() {
         return Output { nodes: Vec::new(), edges: Vec::new(), width: 2.0 * MARGIN, height: 2.0 * MARGIN };
@@ -183,6 +199,8 @@ pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -
         }],
         edges: Vec::new(),
         ranks: Vec::new(),
+        rank_sep: rank_gap.unwrap_or(RANK_SEP),
+        node_sep: node_gap.unwrap_or(NODE_SEP),
     };
     // For each input node: its cluster (a group) or its node (a box).
     let mut cluster_of = vec![usize::MAX; nodes.len()];
@@ -934,7 +952,8 @@ impl Graph {
                 cons.push((i, right_of(node.cluster), node.wr + cluster.pad[1]));
             }
         }
-        let sep = |kind: Kind| if matches!(kind, Kind::Dummy | Kind::Label) { EDGE_SEP } else { NODE_SEP };
+        let node_sep = self.node_sep;
+        let sep = |kind: Kind| if matches!(kind, Kind::Dummy | Kind::Label) { EDGE_SEP } else { node_sep };
         for row in &self.ranks {
             for pair in row.windows(2) {
                 let (a, b) = (&self.nodes[pair[0]], &self.nodes[pair[1]]);
@@ -1131,14 +1150,15 @@ impl Graph {
         }
         // A line that moves far sideways between two rows needs the rows
         // further apart, or it runs almost flat along the boxes.
-        let mut gap = vec![RANK_SEP / 2.0; rows];
+        let rank_sep = self.rank_sep;
+        let mut gap = vec![rank_sep / 2.0; rows];
         for edge in &self.edges {
             if edge.input.is_some() {
                 for pair in edge.chain.windows(2) {
                     let (a, b) = (&self.nodes[pair[0]], &self.nodes[pair[1]]);
                     let sideways = (a.x - b.x).abs() * 0.8;
                     let r = a.rank as usize;
-                    gap[r] = gap[r].max((sideways * 0.3).min(RANK_SEP * 1.5));
+                    gap[r] = gap[r].max((sideways * 0.3).min(rank_sep * 1.5));
                 }
             }
         }

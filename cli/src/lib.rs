@@ -147,6 +147,13 @@ pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>, String> {
     if sources.is_empty() {
         return Err("no .c4 files found".into());
     }
+    // The images the sources name for icons, beside them. One that is not
+    // there is left for the model to report, where it is asked for.
+    for name in c4_model::load(&sources).wanted {
+        if let Ok(text) = std::fs::read_to_string(&name) {
+            sources.push(Source { name, text });
+        }
+    }
     Ok(sources)
 }
 
@@ -232,6 +239,19 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
                 let view = ws.model.compute_view(id).expect("listed views exist");
                 let diagram = c4_layout::layout(&view, &ws.model.colors);
                 let svg = c4_render::svg(&diagram, &SvgOptions { background: o.background.clone() });
+                // Nothing here fetches: an icon kept elsewhere is left out.
+                let fetched = diagram
+                    .nodes
+                    .iter()
+                    .filter_map(|n| n.icon.as_ref())
+                    .filter(|i| !i.href.starts_with("data:"));
+                if format == "png" && fetched.clone().next().is_some() {
+                    let _ = writeln!(
+                        err,
+                        "warning: {id}.png is without {}: a PNG has only icons from SVG files, not from URLs.",
+                        plural(fetched.count(), "icon")
+                    );
+                }
                 let bytes = match (format, &renderer) {
                     ("svg", _) => svg.into_bytes(),
                     ("json", _) => serde_json::to_vec_pretty(&diagram).map_err(|e| e.to_string())?,

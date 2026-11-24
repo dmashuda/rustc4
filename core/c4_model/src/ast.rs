@@ -7,9 +7,24 @@ pub struct File {
     pub specs: Vec<SpecItem>,
     pub model: Vec<ModelItem>,
     pub views: Vec<ViewDef>,
-    /// `style` rules written directly in a `views` block: they apply to
-    /// every view in it.
-    pub view_styles: Vec<ViewRule>,
+    /// For each `views` block, the `style` rules written directly in it:
+    /// they apply to every view in that block, and no other.
+    pub view_styles: Vec<Vec<ViewRule>>,
+    /// What `global { }` blocks define, for views to ask for by name.
+    pub globals: Vec<GlobalDef>,
+    /// `import { a, b } from 'project'`: each name, where it was written.
+    pub imports: Vec<Ref>,
+}
+
+/// A named set of rules from a `global { }` block: `style name * { }`,
+/// `styleGroup name { }`, `predicateGroup name { }`.
+#[derive(Debug)]
+pub struct GlobalDef {
+    pub name: String,
+    pub span: Span,
+    /// Asked for with `global style`; otherwise with `global predicate`.
+    pub style: bool,
+    pub rules: Vec<ViewRule>,
 }
 
 /// `key value` pairs from a `style { ... }` block, in order.
@@ -73,6 +88,7 @@ pub struct RelationDef {
     pub technology: Option<String>,
     pub tags: Vec<String>,
     pub style: StyleProps,
+    pub metadata: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +105,8 @@ pub struct ViewDef {
     pub of: Option<Ref>,
     pub extends: Option<(String, Span)>,
     pub span: Span,
+    /// Which `views` block of the file it is in: see [`File::view_styles`].
+    pub block: usize,
     pub title: Option<String>,
     pub description: Option<String>,
     pub tags: Vec<String>,
@@ -128,8 +146,24 @@ pub struct StepDef {
 pub enum ViewRule {
     Include(Vec<Predicate>),
     Exclude(Vec<Predicate>),
-    Style { targets: Vec<ElementExpr>, style: StyleProps },
-    AutoLayout(Direction),
+    Style {
+        targets: Vec<ElementExpr>,
+        style: StyleProps,
+    },
+    /// `autoLayout LeftRight 120 110`: which way, then how far apart rows
+    /// are, then how far apart the boxes in a row, if it says.
+    AutoLayout {
+        direction: Direction,
+        rank_gap: Option<f64>,
+        node_gap: Option<f64>,
+    },
+    /// `global style name` / `global predicate name`: the rules a `global`
+    /// block gave that name, here.
+    Global {
+        name: String,
+        style: bool,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -138,9 +172,61 @@ pub enum Predicate {
     /// style keys, and `title`/`description`/`technology`.
     Element {
         expr: ElementExpr,
+        /// `where ...`: only those of them this holds for.
+        cond: Option<Condition>,
         with: StyleProps,
     },
-    Relation(RelExpr),
+    /// With `where`, only relationships it holds for count.
+    Relation(RelExpr, Option<Condition>),
+}
+
+/// What comes after `where`: `kind is service and not (tag is #old)`.
+#[derive(Debug, Clone)]
+pub enum Condition {
+    Kind {
+        of: Whose,
+        name: String,
+        eq: bool,
+    },
+    Tag {
+        of: Whose,
+        name: String,
+        eq: bool,
+    },
+    /// `metadata.key is 'value'`; with no value, that the key is there.
+    Metadata {
+        of: Whose,
+        key: String,
+        value: Option<String>,
+        eq: bool,
+    },
+    Not(Box<Condition>),
+    And(Box<Condition>, Box<Condition>),
+    Or(Box<Condition>, Box<Condition>),
+}
+
+/// Whose kind, tag or metadata a condition asks about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Whose {
+    /// The element's, or the relationship's: `kind is x`.
+    Own,
+    /// `source.kind is x`, of a relationship's source.
+    Source,
+    /// `target.kind is x`
+    Target,
+}
+
+impl Condition {
+    /// Whether any part asks about a relationship's `source` or `target`.
+    pub fn names_an_end(&self) -> bool {
+        match self {
+            Condition::Kind { of, .. } | Condition::Tag { of, .. } | Condition::Metadata { of, .. } => {
+                *of != Whose::Own
+            }
+            Condition::Not(c) => c.names_an_end(),
+            Condition::And(a, b) | Condition::Or(a, b) => a.names_an_end() || b.names_an_end(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

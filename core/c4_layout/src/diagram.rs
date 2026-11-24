@@ -64,6 +64,19 @@ pub struct Label {
     pub role: TextRole,
 }
 
+/// An image to draw, whole and undistorted, in the middle of this
+/// rectangle.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Icon {
+    /// Where the image is: an `https:` URL to fetch, or a `data:` URL that
+    /// holds it.
+    pub href: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
@@ -86,6 +99,11 @@ pub struct Node {
     pub stroke: String,
     pub fill_opacity: f64,
     pub border: LineStyle,
+    /// For a stack (`multiple`): where the top left of each further one
+    /// is. The same shape, the same size, drawn first.
+    pub behind: Vec<Point>,
+    /// Drawn over the shape, under the words.
+    pub icon: Option<Icon>,
     pub labels: Vec<Label>,
     /// A view of this element, to open from here.
     pub navigate_to: Option<String>,
