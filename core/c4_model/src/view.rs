@@ -46,6 +46,10 @@ pub struct ViewEdge {
     pub line: Line,
     pub head: Arrow,
     pub tail: Arrow,
+    /// In a dynamic view, which step this is (`3`, `3.1`); empty otherwise.
+    pub step: String,
+    /// What a step's `notes` say.
+    pub notes: String,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,8 @@ pub struct ComputedView {
     pub title: String,
     pub description: String,
     pub direction: Direction,
+    /// A dynamic view: its lines are steps, in the order they happen.
+    pub dynamic: bool,
     /// Parents before their children.
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
@@ -103,7 +109,8 @@ impl Model {
             excluded: Vec::new(),
         };
         let rules = self.rules_of(view, 0);
-        let mut direction = Direction::TopBottom;
+        // A sequence reads across, unless the view says otherwise.
+        let mut direction = if view.dynamic { Direction::LeftRight } else { Direction::TopBottom };
         for rule in &rules {
             match rule {
                 ViewRule::Include(predicates) => predicates.iter().for_each(|p| c.include(p)),
@@ -111,6 +118,12 @@ impl Model {
                 ViewRule::AutoLayout(d) => direction = *d,
                 ViewRule::Style { .. } => {}
             }
+        }
+
+        // Whatever a step is between is there, whatever else was said.
+        for step in &view.steps {
+            c.visible[step.source] = true;
+            c.visible[step.target] = true;
         }
 
         // Nodes, in the model's order (parents first).
@@ -184,7 +197,37 @@ impl Model {
         // Edges: each relationship, lifted to what is showing.
         let mut edges: Vec<ViewEdge> = Vec::new();
         let mut by_ends: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        for (r, rel) in self.relations.iter().enumerate() {
+        for step in &view.steps {
+            let (s, t) = (&self.elements[step.source].fqn, &self.elements[step.target].fqn);
+            let relations = (0..self.relations.len())
+                .filter(|&r| {
+                    let rel = &self.relations[r];
+                    self.is_ancestor_or_self(step.source, rel.source)
+                        && self.is_ancestor_or_self(step.target, rel.target)
+                })
+                .collect();
+            let RelationStyle { color, line, head, tail } = step.style.clone();
+            edges.push(ViewEdge {
+                id: format!("{s}->{t}#{}", step.number),
+                source: s.clone(),
+                target: t.clone(),
+                label: if step.title.is_empty() {
+                    step.number.clone()
+                } else {
+                    format!("{}. {}", step.number, step.title)
+                },
+                technology: step.technology.clone(),
+                relations,
+                color,
+                line,
+                head,
+                tail,
+                step: step.number.clone(),
+                notes: step.notes.clone(),
+            });
+        }
+        let lifted = if view.dynamic { &[][..] } else { &self.relations[..] };
+        for (r, rel) in lifted.iter().enumerate() {
             let (Some(source), Some(target)) = (nearest_shown(rel.source), nearest_shown(rel.target)) else {
                 continue;
             };
@@ -207,12 +250,14 @@ impl Model {
                     line: Line::Dashed,
                     head: Arrow::Normal,
                     tail: Arrow::None,
+                    step: String::new(),
+                    notes: String::new(),
                 });
                 edges.len() - 1
             });
             edges[index].relations.push(r);
         }
-        for edge in &mut edges {
+        for edge in edges.iter_mut().filter(|e| e.step.is_empty()) {
             let rels: Vec<_> = edge.relations.iter().map(|&r| &self.relations[r]).collect();
             // Drawn like the relationship written between exactly these two,
             // if there is one; otherwise like the first.
@@ -244,6 +289,7 @@ impl Model {
             title: view.title.clone(),
             description: view.description.clone(),
             direction,
+            dynamic: view.dynamic,
             nodes,
             edges,
         })
@@ -615,6 +661,68 @@ mod tests {
         let (nodes, edges) = summary(&view);
         assert_eq!(nodes, ["customer", "shop.ui", "shop.api", "shop.db", "mail"]);
         assert!(!edges.iter().any(|e| e.contains("->mail")), "{edges:?}");
+    }
+
+    #[test]
+    fn a_dynamic_view_shows_its_steps_in_order() {
+        let source = SHOP.replace(
+            "view index { include * }",
+            "view index { include * }
+            dynamic view checkout {
+                title 'Checking out'
+                customer -> shop.ui 'presses Buy'
+                shop.ui -> shop.api
+                shop.api -> shop.db 'saves the order' 'SQL' { notes 'One transaction.' }
+                parallel {
+                    shop.api -[async]-> mail.smtp
+                    shop.ui <- shop.api 'order number' { line solid }
+                }
+                customer <- shop.ui -> shop.api 'asks again'
+                include shop
+                variant sequence
+                shop -> shop.api
+                nobody -> shop
+            }",
+        );
+        let ws = load(&[Source { name: "shop.c4".into(), text: source }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.to_string()).collect();
+        assert_eq!(
+            messages,
+            [
+                "shop.c4:39:17: warning: The 'sequence' variant is not supported yet; this view is drawn as a diagram.",
+                "shop.c4:40:17: error: A step needs two different elements, neither inside the other.",
+                "shop.c4:41:17: error: There is no element 'nobody'.",
+            ]
+        );
+        assert!(ws.model.view_ids().contains(&"checkout"));
+        let view = ws.model.compute_view("checkout").unwrap();
+        assert!(view.dynamic);
+        assert_eq!((view.title.as_str(), view.direction), ("Checking out", crate::Direction::LeftRight));
+        let (nodes, edges) = summary(&view);
+        // The ends of every step, and the group that was asked for; not
+        // everything the model has between them.
+        assert_eq!(nodes, ["customer", "shop", "shop.ui", "shop.api", "shop.db", "mail.smtp"]);
+        assert_eq!(
+            edges,
+            [
+                "customer->shop.ui#1 | 1. presses Buy",
+                // Said as the model says it, where the step says nothing.
+                "shop.ui->shop.api#2 | 2. calls",
+                "shop.api->shop.db#3 | 3. saves the order",
+                "shop.api->mail.smtp#4.1 | 4.1. sends receipts",
+                "shop.api->shop.ui#4.2 | 4.2. order number",
+                // An answer going back is not the relationship going forward.
+                "shop.ui->customer#5 | 5",
+                "shop.ui->shop.api#6 | 6. asks again",
+            ]
+        );
+        assert_eq!(
+            (view.edges[2].technology.as_str(), view.edges[2].notes.as_str()),
+            ("SQL", "One transaction.")
+        );
+        assert_eq!(view.edges[3].line, crate::Line::Dotted);
+        assert_eq!(view.edges[4].line, crate::Line::Solid);
+        assert_eq!(view.edges[1].relations.len(), 1);
     }
 
     #[test]

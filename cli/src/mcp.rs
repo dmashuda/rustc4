@@ -346,7 +346,7 @@ mod tests {
     fn tools_answer_in_text() {
         let mut server = Server::new(vec![PathBuf::from("examples/shop.c4")]);
         let (text, failed) = tool(&mut server, "overview", json!({}));
-        assert!(!failed && text.starts_with("14 elements, 15 relationships, 4 views."), "{text}");
+        assert!(!failed && text.starts_with("14 elements, 15 relationships, 5 views."), "{text}");
         let (text, _) = tool(&mut server, "search", json!({ "query": "kafka" }));
         assert!(text.contains("shop.events (Order events, queue) [Kafka]"), "{text}");
         let (text, _) = tool(&mut server, "element", json!({ "name": "shop.events" }));

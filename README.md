@@ -183,14 +183,14 @@ The LikeC4 dialect, most of it:
 | --- | --- |
 | `specification` | `element` kinds with `style`, `relationship` kinds, `tag`, `color name #hex` |
 | `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'technology'`, `-> b` from inside an element, `a -[kind]-> b`, with `line`, `color`, `head`, `tail`; `extend a.b { }` |
-| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft` |
+| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps |
 | Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity` |
 
 Sources may be split over any number of `.c4` (or `.likec4`) files; they are
 read as one model. A mistake is reported with its file, line and column, and
 everything that could be understood is still drawn.
 
-Not there yet: dynamic and deployment views, `where` conditions, `global`
+Not there yet: deployment views, the `sequence` variant of a dynamic view, `where` conditions, `global`
 blocks, icons, and manual layout. They are reported as unsupported rather
 than silently ignored.
 

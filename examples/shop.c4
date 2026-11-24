@@ -97,4 +97,20 @@ views {
     exclude shop.api.accounts, shop.api.catalogue
     style shop.api.orders, shop.events, shop.fulfilment { color indigo }
   }
+
+  dynamic view checkout {
+    title 'Placing an order'
+    description 'What happens, in order, when a customer presses Buy'
+    customer -> shop.web 'presses Buy'
+    shop.web -> shop.api.orders 'places the order'
+    shop.api.orders -> shop.api.catalogue
+    shop.api.orders -> payments 'charges the card'
+    shop.api.orders <- payments 'approved'
+    parallel {
+      shop.api.orders -> shop.db 'saves the order'
+      shop.api.orders -> shop.events 'publishes "order placed"'
+    }
+    shop.web <- shop.api.orders 'order number'
+    include shop, shop.api
+  }
 }
