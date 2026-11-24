@@ -170,10 +170,12 @@ public struct C4View: View {
     #endif
 
     /// The diagram as PNG data, at twice its size for sharp text, on a
-    /// transparent background: the same drawing the window shows.
+    /// transparent background: the same drawing the window shows, with
+    /// the icons that are to hand (one still being fetched is left out).
     @MainActor static func png(of diagram: Diagram, scale: CGFloat = 2) -> Data? {
+        let icons = IconStore.shared.images(for: diagram)
         let drawing = Canvas { context, _ in
-            DiagramDrawing(diagram: diagram, selected: "", accent: .accentColor).draw(in: &context)
+            DiagramDrawing(diagram: diagram, selected: "", accent: .accentColor, icons: icons).draw(in: &context)
         }
         .frame(width: diagram.width, height: diagram.height)
         let renderer = ImageRenderer(content: drawing)

@@ -49,6 +49,17 @@ public final class C4Model {
 
     // MARK: Models on disk
 
+    /// The files and folders a command line names. `bazel run` starts the
+    /// app somewhere of its own and says where the command was typed, in
+    /// `BUILD_WORKING_DIRECTORY`: a path that is not absolute is meant
+    /// from there.
+    public nonisolated static func urls(forArguments arguments: [String], environment: [String: String]) -> [URL] {
+        let typedIn = environment["BUILD_WORKING_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return arguments.filter { !$0.hasPrefix("-") }.map { path in
+            URL(fileURLWithPath: path, relativeTo: path.hasPrefix("/") ? nil : typedIn).standardizedFileURL
+        }
+    }
+
     /// Shows the model in these files and directories, and keeps showing
     /// it as they change: edit in any editor, and the window follows.
     public func open(_ urls: [URL], watching: Bool = true) {
