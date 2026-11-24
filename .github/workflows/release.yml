@@ -5,13 +5,16 @@
 # this workflow from one that is not), and publishes them as a GitHub
 # release. Only the CLI is released: the macOS app is not.
 #
-# Run by hand (workflow_dispatch) it builds and keeps the archives as
-# workflow artifacts, and publishes nothing: a rehearsal.
+# Run by hand (workflow_dispatch), or by a pull request that changes this
+# file, it builds and keeps the archives as workflow artifacts, and
+# publishes nothing: a rehearsal.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
