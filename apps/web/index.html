@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rustc4</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- A shell only: everything inside these containers is drawn from the
+         Rust screen by main.js. -->
+    <div id="app" class="app">
+      <aside id="side" class="side">
+        <h2 id="views-title"></h2>
+        <nav id="views"></nav>
+        <p id="status" class="status"></p>
+      </aside>
+      <section id="edit" class="edit" hidden>
+        <header>
+          <h2 id="edit-title"></h2>
+          <div id="files" class="files"></div>
+        </header>
+        <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+        <div id="problems" class="problems" hidden></div>
+      </section>
+      <main class="stage">
+        <header class="bar">
+          <div id="back"></div>
+          <div class="heading">
+            <h1 id="title"></h1>
+            <p id="description"></p>
+          </div>
+          <div id="exports" class="tools"></div>
+          <div id="zoom" class="tools"></div>
+        </header>
+        <div id="canvas" class="canvas">
+          <div id="world" class="world"></div>
+          <p id="empty" class="empty" hidden></p>
+        </div>
+        <aside id="details" class="details" hidden></aside>
+      </main>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

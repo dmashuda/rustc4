@@ -1,0 +1,46 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library", "js_test")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
+
+# Compiled for wasm32 only: rust_wasm_bindgen below transitions into the
+# wasm platform, so this target is never built for the host.
+rust_shared_library(
+    name = "rustc4_wasm",
+    srcs = ["src/lib.rs"],
+    target_compatible_with = ["@platforms//cpu:wasm32"],
+    deps = [
+        "//core/c4_model",
+        "//core/c4_render",
+        "//core/c4_ui",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:wasm-bindgen",
+    ],
+)
+
+# Emits rustc4.js (ES module loader), rustc4_bg.wasm and .d.ts files.
+rust_wasm_bindgen(
+    name = "rustc4_wasm_bindgen",
+    out_name = "rustc4",
+    target = "web",
+    visibility = ["//visibility:public"],
+    wasm_file = ":rustc4_wasm",
+)
+
+# The same outputs, wrapped as a JS library so ts_project/esbuild targets can
+# depend on it like any other JS package (and see rustc4.d.ts).
+js_library(
+    name = "rustc4_wasm_js",
+    srcs = [":rustc4_wasm_bindgen"],
+    visibility = ["//visibility:public"],
+)
+
+js_test(
+    name = "rustc4_wasm_test",
+    size = "small",
+    data = [
+        ":rustc4_wasm_js",
+        "//examples:examples_js",
+    ],
+    entry_point = "rustc4_wasm.test.mjs",
+)

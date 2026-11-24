@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The language and the model: source text in, computed views out. No layout,
+# no drawing, no third-party crates.
+rust_library(
+    name = "c4_model",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = [
+        "//bindings:__subpackages__",
+        "//cli:__subpackages__",
+        "//core:__subpackages__",
+    ],
+)
+
+rust_test(
+    name = "c4_model_test",
+    size = "small",
+    crate = ":c4_model",
+)

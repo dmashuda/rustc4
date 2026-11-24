@@ -1,0 +1,81 @@
+load("@aspect_rules_esbuild//esbuild:defs.bzl", "esbuild")
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+
+# Type-check only; esbuild does the transpiling and bundling below.
+ts_project(
+    name = "typecheck",
+    srcs = glob(["src/**/*.ts"]),
+    no_emit = True,
+    tsconfig = "tsconfig.json",
+    deps = ["//bindings/wasm:rustc4_wasm_js"],
+)
+
+# Minifying a fastbuild bundle only makes it unreadable; --config=release
+# (compilation_mode=opt) is what ships.
+config_setting(
+    name = "optimized",
+    values = {"compilation_mode": "opt"},
+)
+
+esbuild(
+    name = "bundle",
+    srcs = glob(["src/**/*.ts"]),
+    entry_point = "src/main.ts",
+    format = "esm",
+    minify = select({
+        ":optimized": True,
+        "//conditions:default": False,
+    }),
+    output = "main.js",
+    target = "es2022",
+    deps = ["//bindings/wasm:rustc4_wasm_js"],
+)
+
+VIEWER_SRCS = [
+    "index.html",
+    "style.css",
+    ":bundle",
+    "//bindings/wasm:rustc4_wasm_bindgen",
+]
+
+# Only the .wasm is needed at runtime; rustc4.js is already inside main.js.
+VIEWER_EXCLUDES = [
+    "**/*.d.ts",
+    "**/rustc4.js",
+    "**/snippets/**",
+    "**/*.map",
+]
+
+VIEWER_PREFIXES = {
+    "apps/web/": "",
+    "bindings/wasm/rustc4_wasm_bindgen/": "",
+}
+
+# The app without a model: what `rustc4 build` copies beside a model.json.
+# Everything flattened into one directory.
+copy_to_directory(
+    name = "viewer",
+    srcs = VIEWER_SRCS,
+    exclude_srcs_patterns = VIEWER_EXCLUDES,
+    replace_prefixes = VIEWER_PREFIXES,
+    visibility = ["//visibility:public"],
+)
+
+# The playground: the viewer plus the example it opens with.
+copy_to_directory(
+    name = "site",
+    srcs = VIEWER_SRCS + ["//examples:shop.c4"],
+    exclude_srcs_patterns = VIEWER_EXCLUDES,
+    replace_prefixes = VIEWER_PREFIXES | {"examples/shop.c4": "example.c4"},
+    visibility = ["//visibility:public"],
+)
+
+# `bazel run //apps/web:serve` then open http://localhost:8080
+js_binary(
+    name = "serve",
+    args = ["$(rootpath :site)"],
+    data = [":site"],
+    entry_point = "//tools/serve",
+)

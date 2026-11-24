@@ -1,0 +1,7 @@
+{
+  "name": "rustc4",
+  "private": true,
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

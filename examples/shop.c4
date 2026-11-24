@@ -1,0 +1,100 @@
+// A small online shop: the example the playground opens with.
+
+specification {
+  element actor {
+    style {
+      shape person
+      color green
+    }
+  }
+  element system
+  element external {
+    style { color muted }
+  }
+  element app
+  element service
+  element database {
+    style { shape storage }
+  }
+  element queue {
+    style { shape queue }
+  }
+
+  relationship async {
+    line dotted
+    head open
+  }
+
+  tag next
+}
+
+model {
+  customer = actor 'Customer' 'Browses the catalogue and places orders'
+  staff = actor 'Warehouse staff' 'Picks and packs what was ordered'
+
+  shop = system 'Shop' 'Sells things online' {
+    web = app 'Storefront' 'What a customer sees' 'TypeScript, React' {
+      style { shape browser }
+    }
+    mobile = app 'Mobile app' 'The storefront in a pocket' 'Swift, Kotlin' {
+      style { shape mobile }
+    }
+    api = service 'API' 'One front door for every client' 'Rust' {
+      catalogue = service 'Catalogue' 'What is for sale, and for how much'
+      orders = service 'Orders' 'Takes an order from basket to doorstep'
+      accounts = service 'Accounts' 'Who is who'
+
+      orders -> catalogue 'checks prices'
+      orders -> accounts 'checks the customer'
+    }
+    db = database 'Database' 'Products, customers, orders' 'PostgreSQL'
+    events = queue 'Order events' 'Everything that happens to an order' 'Kafka'
+    fulfilment = service 'Fulfilment' 'Tells the warehouse what to ship' 'Rust' {
+      #next
+    }
+
+    web -> api 'calls' 'HTTPS, JSON'
+    mobile -> api 'calls' 'HTTPS, JSON'
+    api.catalogue -> db 'reads'
+    api.orders -> db 'reads and writes'
+    api.accounts -> db 'reads and writes'
+    api.orders -[async]-> events 'publishes'
+    events -[async]-> fulfilment 'delivers'
+  }
+
+  payments = external 'Payment provider' 'Takes card payments'
+  mail = external 'Email service' 'Sends receipts and shipping updates'
+
+  customer -> shop.web 'shops with'
+  customer -> shop.mobile 'shops with'
+  shop.api.orders -> payments 'charges cards through' 'HTTPS'
+  shop.fulfilment -> mail 'sends updates through'
+  shop.fulfilment -> staff 'sends pick lists to'
+  mail -> customer 'emails'
+}
+
+views {
+  view index {
+    title 'Landscape'
+    description 'The shop and everything around it'
+    include *
+  }
+
+  view shop of shop {
+    title 'Inside the shop'
+    include *
+  }
+
+  view api of shop.api {
+    title 'Inside the API'
+    include *
+    autoLayout LeftRight
+  }
+
+  view orders {
+    title 'An order, end to end'
+    include customer, staff, shop, shop.*, shop.api.*, payments, mail
+    exclude shop.api.accounts, shop.api.catalogue
+    style shop.api.orders, shop.events, shop.fulfilment { color indigo }
+  }
+}

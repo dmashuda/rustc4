@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A Diagram as SVG text: what the web app shows and what the CLI exports.
+rust_library(
+    name = "c4_render",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = [
+        "//bindings:__subpackages__",
+        "//cli:__subpackages__",
+        "//core:__subpackages__",
+    ],
+    deps = ["//core/c4_layout"],
+)
+
+rust_test(
+    name = "c4_render_test",
+    size = "small",
+    crate = ":c4_render",
+    deps = ["//core/c4_model"],
+)

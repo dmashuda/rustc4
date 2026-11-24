@@ -1,0 +1,87 @@
+# Everything here is built and tested by Bazel, so CI is just Bazel. The
+# toolchains (Rust, LLVM, Node) are all downloaded or built by Bazel, so a
+# runner with no compiler installed should pass.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: bazel test
+    runs-on: ubuntu-latest
+    # A cold run compiles glibc, libc++, compiler-rt and libunwind from
+    # source for the hermetic toolchain. The cache makes later runs short.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bazel version
+        run: bazel --version
+
+      # .bazelrc try-imports user.bazelrc, so every bazel command below picks
+      # these paths up without repeating flags.
+      - name: Point Bazel at the CI caches
+        run: |
+          printf 'common --repository_cache=%s\ncommon --disk_cache=%s\n' \
+            "$HOME/.cache/bazel-ci-repo" "$HOME/.cache/bazel-ci-disk" > user.bazelrc
+
+      # Restore and save are separate steps on purpose: the combined
+      # actions/cache only writes when the job succeeds, so a slow cold run
+      # that then failed would leave nothing behind.
+      - name: Restore Bazel caches
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-ci-disk
+          key: bazel-v1-${{ hashFiles('MODULE.bazel.lock', 'pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            bazel-v1-${{ hashFiles('MODULE.bazel.lock', 'pnpm-lock.yaml') }}-
+            bazel-v1-
+
+      - name: Test everything
+        run: bazel test --keep_going //...
+
+      - name: Clippy
+        run: |
+          bazel build --keep_going \
+            --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
+            --output_groups=clippy_checks \
+            //core/... //bindings/... //cli/...
+
+      # The .rustfmt.toml to check against comes from .bazelrc.
+      - name: Rustfmt
+        run: |
+          bazel build --keep_going \
+            --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect \
+            --output_groups=rustfmt_checks \
+            //core/... //bindings/... //cli/...
+
+      - name: Release build
+        run: bazel build --config=release //cli //apps/web:site
+
+      - name: Save Bazel caches
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-ci-disk
+          key: ${{ steps.restore.outputs.cache-primary-key }}
+
+      - name: Upload failed test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlogs
+          path: bazel-testlogs/**
+          if-no-files-found: ignore

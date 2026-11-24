@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The viewer, without a screen: which view is showing, what is selected,
+# what the side panels say. Front ends draw the Screen and report taps.
+rust_library(
+    name = "c4_ui",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = [
+        "//bindings:__subpackages__",
+        "//core:__subpackages__",
+    ],
+    deps = [
+        "//core/c4_layout",
+        "//core/c4_model",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "c4_ui_test",
+    size = "small",
+    crate = ":c4_ui",
+    compile_data = ["//examples:shop.c4"],
+    deps = ["@crates//:serde_json"],
+)

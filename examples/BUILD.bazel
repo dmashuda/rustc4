@@ -1,0 +1,17 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+filegroup(
+    name = "examples",
+    srcs = glob(["*.c4"]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(glob(["*.c4"]))
+
+# The same files for JS targets: rules_js copies sources into bazel-bin per
+# package, so another package can only take them through a js_library.
+js_library(
+    name = "examples_js",
+    srcs = glob(["*.c4"]),
+    visibility = ["//visibility:public"],
+)

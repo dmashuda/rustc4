@@ -1,0 +1,134 @@
+# rustc4
+
+Architecture diagrams as code, in the [C4](https://c4model.com) style: describe
+a system once, as a model, and get every diagram of it from that. It reads the
+[LikeC4](https://likec4.dev) language and does what LikeC4 does (an
+interactive viewer, images, a static site), with everything that matters
+written once, in Rust, and compiled to each place it runs.
+
+![The example shop, from the inside](docs/shop.svg)
+
+```
+specification {
+  element actor { style { shape person; color green } }
+  element system
+  element service
+}
+
+model {
+  customer = actor 'Customer'
+  shop = system 'Shop' {
+    web = service 'Storefront' 'What a customer sees' 'React' { style { shape browser } }
+    api = service 'API' 'One front door' 'Rust'
+    web -> api 'calls' 'HTTPS'
+  }
+  customer -> shop.web 'shops with'
+}
+
+views {
+  view index { include * }          // customer -> shop
+  view shop of shop { include * }   // inside the shop, and who uses it
+}
+```
+
+## Using it
+
+Everything is built by Bazel (bazelisk reads `.bazelversion`); nothing else
+needs installing.
+
+```bash
+bazel run //apps/web:serve                 # the playground, on http://localhost:8080
+bazel run //cli -- check examples          # report problems in a model
+bazel run //cli -- export svg examples -o out      # every view as an image
+bazel run //cli -- export png examples -o out --view shop --scale 2
+bazel run //cli -- build examples -o dist  # a static site: viewer + model + SVGs
+bazel test //...
+```
+
+`bazel build --config=release //cli` gives a single `rustc4` binary with the
+web viewer inside it: `rustc4 build` needs nothing else to write a site, and
+any file server can host the result.
+
+In the viewer: click a box or a line to see what it is and what it connects
+to, double-click a box with a magnifying glass (or click the glass) to go to
+the closer view of it, drag to move, pinch or ctrl-scroll to zoom. The address
+bar follows the view, so a link opens on it. The playground has the source
+beside the diagram and redraws as you type.
+
+## How it is put together
+
+The architecture is [med-log](https://github.com/dmashuda/med-log)'s: a Bazel
+monorepo where Rust owns all behaviour and front ends only draw.
+
+```
+core/c4_model     Rust: the language (lexer, parser), the model, and computing
+                  what a view shows. No dependencies.
+core/c4_layout    Rust: a computed view -> a Diagram. Sizes boxes from their
+                  text, lays them out, routes the lines. No font, no platform.
+core/c4_render    Rust: a Diagram -> SVG text.
+core/c4_ui        Rust: the viewer as a state machine. A Screen out, taps in.
+bindings/wasm     wasm-bindgen wrapper of c4_ui -> JS/TS (web)
+apps/web          renderer: TypeScript + esbuild. Draws the Screen, pans and zooms.
+cli               Rust: check, export (SVG, PNG, JSON), build (static site)
+examples          models to try
+tools/, bazel/    toolchains, from med-log
+```
+
+### One diagram, drawn the same everywhere
+
+A `Diagram` (`core/c4_layout/src/diagram.rs`) is finished: every box has a
+position and colors, every line of text has a baseline and has already been
+wrapped, every relationship is a list of Bézier points with the outline of its
+arrowhead. A renderer draws shapes, paths and text at the coordinates given.
+
+That works without a font because text is measured from a table of
+Helvetica's widths (`text.rs`), and renderers draw with a font of that family.
+So the CLI, wasm in a browser and (next) a native app all break lines in the
+same place and produce the same picture.
+
+The layout (`graph.rs`) is a layered one written for this, since Graphviz is
+not something that compiles to wasm and a phone: rank, order to reduce
+crossings, place by solving separation constraints, route through the rows.
+Groups are part of it throughout, so a box inside a system and a box outside
+it can share a row and still never overlap the system's border.
+
+### One screen, any renderer
+
+`C4Ui::screen()` returns what is on the screen: the list of views, the
+diagram, the panel about whatever is selected, the problems in the source.
+A renderer draws that and reports `tap(id)` when something is activated and
+`set_source(file, text)` when the source is edited. Which view shows, what a
+click does and every word on the screen are decided in Rust, so adding to the
+viewer changes Rust and nothing else. What stays with the platform is what
+only it can do: panning and zooming, the address bar, saving a file.
+
+### The language
+
+The LikeC4 dialect, most of it:
+
+| | |
+| --- | --- |
+| `specification` | `element` kinds with `style`, `relationship` kinds, `tag`, `color name #hex` |
+| `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'technology'`, `-> b` from inside an element, `a -[kind]-> b`, with `line`, `color`, `head`, `tail`; `extend a.b { }` |
+| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft` |
+| Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity` |
+
+Sources may be split over any number of `.c4` (or `.likec4`) files; they are
+read as one model. A mistake is reported with its file, line and column, and
+everything that could be understood is still drawn.
+
+Not there yet: dynamic and deployment views, `where` conditions, `global`
+blocks, icons, and manual layout. They are reported as unsupported rather
+than silently ignored.
+
+## What is next
+
+- **Native apps.** The reason for the architecture: a UniFFI binding of
+  `c4_ui` beside the wasm one, and SwiftUI and Android renderers that draw the
+  same `Screen` and `Diagram`, as med-log has.
+- **A bundled font for PNG export**, so the CLI's PNGs do not depend on what
+  the machine has installed (they use Helvetica, Arial or the nearest
+  sans-serif found).
+- **Flows**: behaviour tests written once in Rust and run through every
+  renderer, as med-log's are.
+- `rustc4 serve` with live reload, and a language server.

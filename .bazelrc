@@ -1,0 +1,25 @@
+# Aspect's rulesets report ruleset/version usage home on every build.
+common --repo_env=DO_NOT_TRACK=1
+
+# Only the failing test's output, rather than a pointer to a log file.
+test --test_output=errors
+
+# The formatting the Rust here is committed in. Check with
+#   bazel build --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect \
+#       --output_groups=rustfmt_checks //core/... //bindings/... //cli/...
+# and apply with `bazel run @rules_rust//tools/rustfmt`.
+common --@rules_rust//rust/settings:rustfmt.toml=//:.rustfmt.toml
+
+# Pick up per-user overrides last.
+try-import %workspace%/user.bazelrc
+
+# Optimised builds: smaller wasm and minified JS.
+build:release --compilation_mode=opt
+
+# One macOS deployment target for everything built for the host. Without
+# this the Apple CC toolchain targets the running OS while rustc assumes
+# 11.0, and every Rust link warns about the mismatch.
+common --macos_minimum_os=14.0
+common --host_macos_minimum_os=14.0
+common --action_env=MACOSX_DEPLOYMENT_TARGET=14.0
+common --host_action_env=MACOSX_DEPLOYMENT_TARGET=14.0

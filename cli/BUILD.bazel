@@ -1,0 +1,53 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# The command line: check a model, export its views as SVG or PNG, build a
+# static site. `bazel run //cli -- --help`
+# The web viewer's four files, pulled out of its directory so they can be
+# compiled into the binary: `rustc4 build` writes them beside a model.json,
+# and the binary needs nothing else at hand to make a site.
+VIEWER_FILES = [
+    "index.html",
+    "style.css",
+    "main.js",
+    "rustc4_bg.wasm",
+]
+
+genrule(
+    name = "viewer_files",
+    srcs = ["//apps/web:viewer"],
+    outs = ["viewer/" + f for f in VIEWER_FILES],
+    cmd = "cp $(location //apps/web:viewer)/* $(RULEDIR)/viewer/",
+)
+
+rust_library(
+    name = "cli_lib",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    compile_data = [":viewer_files"],
+    crate_name = "rustc4_cli",
+    # include_bytes! wants a path it can open from the source file's own
+    # directory, so: an absolute one. Only the bytes end up in the binary.
+    rustc_env = {
+        "VIEWER_DIR": "$${pwd}/$(BINDIR)/cli/viewer",
+    },
+    deps = [
+        "//core/c4_layout",
+        "//core/c4_model",
+        "//core/c4_render",
+        "@crates//:resvg",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_binary(
+    name = "cli",
+    srcs = ["src/main.rs"],
+    crate_name = "rustc4",
+    deps = [":cli_lib"],
+)
+
+rust_test(
+    name = "cli_test",
+    size = "small",
+    crate = ":cli_lib",
+    data = ["//examples"],
+)

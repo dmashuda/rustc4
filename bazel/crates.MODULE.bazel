@@ -1,0 +1,74 @@
+"""Third-party crates (crate_universe, no Cargo.toml: the specs live here).
+
+Two repos, so the wasm-bindgen CLI's dependencies never get feature-unified
+into what ships inside the apps.
+"""
+
+# Must match the CLI built in //tools/wasm_bindgen.
+WASM_BINDGEN_VERSION = "=0.2.129"
+
+CRATE_TRIPLES = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "wasm32-unknown-unknown",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+crate.spec(
+    package = "wasm-bindgen",
+    repositories = ["crates"],
+    version = WASM_BINDGEN_VERSION,
+)
+
+# How diagrams and the screen cross to the front ends.
+crate.spec(
+    features = ["derive"],
+    package = "serde",
+    repositories = ["crates"],
+    version = "1",
+)
+crate.spec(
+    package = "serde_json",
+    repositories = ["crates"],
+    version = "1",
+)
+
+# PNG export (//cli only): rasterizes the SVG the core renders.
+crate.spec(
+    package = "resvg",
+    repositories = ["crates"],
+    version = "0.45",
+)
+
+crate.from_specs(
+    name = "crates",
+    supported_platform_triples = CRATE_TRIPLES,
+)
+
+# Build-time tools (run on the exec platform only).
+# default_features = False drops rustls, whose `ring` dependency does not
+# build under crate_universe. The CLI only needs TLS to download webdrivers.
+crate.spec(
+    default_features = False,
+    package = "wasm-bindgen-cli",
+    repositories = ["tool_crates"],
+    version = WASM_BINDGEN_VERSION,
+)
+crate.annotation(
+    crate = "wasm-bindgen-cli",
+    gen_binaries = ["wasm-bindgen"],
+    repositories = ["tool_crates"],
+)
+crate.from_specs(
+    name = "tool_crates",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+    ],
+)
+use_repo(crate, "crates", "tool_crates")

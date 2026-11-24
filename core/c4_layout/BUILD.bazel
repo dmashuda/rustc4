@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A computed view in, a Diagram out: sizes, positions, colors, line breaks,
+# curves. Deterministic and font-free, so every target draws the same thing.
+rust_library(
+    name = "c4_layout",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = [
+        "//bindings:__subpackages__",
+        "//cli:__subpackages__",
+        "//core:__subpackages__",
+    ],
+    deps = [
+        "//core/c4_model",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "c4_layout_test",
+    size = "small",
+    crate = ":c4_layout",
+)
