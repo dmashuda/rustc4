@@ -41,6 +41,8 @@ fn dash(line: LineStyle) -> &'static str {
         LineStyle::Solid => "",
         LineStyle::Dashed => r#" stroke-dasharray="6 4""#,
         LineStyle::Dotted => r#" stroke-dasharray="1.5 4" stroke-linecap="round""#,
+        // No border: the same shape, with nothing drawn around it.
+        LineStyle::Hidden => r#" stroke-dasharray="0 1""#,
     }
 }
 
@@ -501,6 +503,17 @@ mod tests {
         assert_eq!(legend.matches("<path").count(), 3);
         assert!(legend.contains(r#"stroke-dasharray="1.5 4""#) && legend.contains("<polygon"));
         assert!(legend.contains(r#"<text class="Legend""#) && legend.contains(">Data &amp; more</text>"));
+    }
+
+    #[test]
+    fn a_box_without_a_border_has_nothing_drawn_around_it() {
+        let out = render(
+            "specification { element box }
+            model { one = box 'One' { style { border none } } }
+            views { view index { include * } }",
+            &SvgOptions::default(),
+        );
+        assert!(out.contains(r#"stroke-width="1.5" stroke-dasharray="0 1"/>"#), "{out}");
     }
 
     #[test]

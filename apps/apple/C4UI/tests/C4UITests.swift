@@ -27,6 +27,31 @@ final class C4UITests: XCTestCase {
         XCTAssertFalse(model.svg().hasPrefix("<svg"))
     }
 
+    func testFilesTheModelNamesAreReadWithIt() throws {
+        let folder = try temporaryDirectory()
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try "specification { element box } model { a = box 'A' { descriptionFile ./docs/a.md; icon ./a.svg } }"
+            .write(to: folder.appendingPathComponent("m.c4"), atomically: true, encoding: .utf8)
+        let text = folder.appendingPathComponent("docs/a.md")
+        try "What A does.".write(to: text, atomically: true, encoding: .utf8)
+        try "<svg xmlns='http://www.w3.org/2000/svg'/>"
+            .write(to: folder.appendingPathComponent("a.svg"), atomically: true, encoding: .utf8)
+        try "Nobody names this.".write(to: folder.appendingPathComponent("docs/other.md"), atomically: true, encoding: .utf8)
+
+        let model = C4Model()
+        model.open([folder], watching: false)
+        XCTAssertEqual(model.screen.problems.map(\.text), [])
+        XCTAssertEqual(model.screen.diagram?.nodes.first?.icon?.href.hasPrefix("data:image/svg+xml;base64,"), true)
+        model.tap("node.a")
+        XCTAssertEqual(model.screen.details?.description, "What A does.")
+
+        // A file the model names is followed like the model's own.
+        try "What A does now.".write(to: text, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: text.path)
+        model.reloadIfChanged()
+        XCTAssertEqual(model.screen.details?.description, "What A does now.")
+    }
+
     func testAFolderIsReadAndFollowed() throws {
         let folder = try temporaryDirectory()
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)

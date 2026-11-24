@@ -302,6 +302,13 @@ impl C4Ui {
         model.compute_view(view).map(|v| c4_layout::layout_with(&v, &model.colors, options))
     }
 
+    /// Files the sources name (an icon's image, a description's text) that
+    /// are not among them, each by the name it would have. A front end that
+    /// can read files reads them and gives them with the rest.
+    pub fn wanted(&self) -> &[String] {
+        &self.workspace.wanted
+    }
+
     /// The sources as they stand, edits and all: for a front end that keeps
     /// them between visits.
     pub fn sources(&self) -> &[Source] {
@@ -713,6 +720,16 @@ impl C4Ui {
                         [said, edge.notes.as_str()].into_iter().filter(|t| !t.is_empty()).collect();
                     (format!("Step {}", edge.step), text.join("\n\n"))
                 };
+                // Every link of every relationship the line stands for, once.
+                let mut links: Vec<Link> = Vec::new();
+                for (url, title) in edge.relations.iter().flat_map(|&r| &model.relations[r].links) {
+                    if !links.iter().any(|l| l.url == *url) {
+                        links.push(Link {
+                            url: url.clone(),
+                            text: if title.is_empty() { url.clone() } else { title.clone() },
+                        });
+                    }
+                }
                 let mut sections = Vec::new();
                 if !rows.is_empty() || edge.step.is_empty() {
                     sections.push(Section { title: "Relationships".into(), rows });
@@ -724,7 +741,7 @@ impl C4Ui {
                     technology: edge.technology.clone(),
                     description,
                     tags: Vec::new(),
-                    links: Vec::new(),
+                    links,
                     actions: Vec::new(),
                     sections,
                     close,
@@ -776,6 +793,25 @@ mod tests {
         let screen = ui.tap("view.bare");
         assert!(screen.legend.is_none() && screen.diagram.unwrap().legend.is_none());
         assert!(ui.tap("back").diagram.unwrap().legend.is_some());
+    }
+
+    #[test]
+    fn a_line_shows_the_links_of_its_relationships() {
+        let source = "specification { element box }
+            model {
+                a = box { inner = box }
+                b = box
+                a -> b 'one' { link https://example.com/one 'One' }
+                a.inner -> b 'two' { link https://example.com/two; link https://example.com/one }
+            }
+            views { view index { include a, b } }";
+        let mut ui = C4Ui::new(vec![Source { name: "m.c4".into(), text: source.into() }], false);
+        let details = ui.tap("edge.a->b").details.unwrap();
+        let links: Vec<_> = details.links.iter().map(|l| (l.text.as_str(), l.url.as_str())).collect();
+        assert_eq!(
+            links,
+            [("One", "https://example.com/one"), ("https://example.com/two", "https://example.com/two")]
+        );
     }
 
     fn texts(items: &[Item]) -> Vec<&str> {

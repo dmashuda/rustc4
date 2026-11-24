@@ -59,8 +59,10 @@ bazel run //cli -- --help
 bazel test //...
 ```
 
-`examples/` holds separate models: `shop.c4`, `bigbank.c4`, and
-`delivery/`, which shows icons, sizes, stacks, `where`, `global` and a legend. Give
+`examples/` holds separate models: `shop.c4`, `bigbank.c4`,
+`delivery/`, which shows icons, sizes, stacks, `where`, `global` and a legend,
+and `library/`, which shows the ways of writing a relationship and what a
+view can say of one. Give
 one, as above. (Given all of `examples`, they are read as one model, which
 is what a directory means, and what more than one defines is reported.)
 
@@ -113,8 +115,8 @@ source to edit; **Open…** (⌘O), dropping a folder on the window, or a path o
 the command line shows a model from disk instead, and the window then follows
 the files as you save them from whatever editor you use.
 
-An icon's SVG file is read along with the sources that name it, and goes
-into a bundle and a site with them. An icon from a URL is fetched by whatever
+An icon's SVG file, and the file of a `descriptionFile`, are read along
+with the sources that name them, and go into a bundle and a site with them. An icon from a URL is fetched by whatever
 shows the diagram (a browser, the macOS app), so a PNG, which nothing
 fetches for, is drawn without it, and says so.
 
@@ -241,9 +243,9 @@ The LikeC4 dialect, most of it:
 | | |
 | --- | --- |
 | `specification` | `element` kinds with `style` and tags, `relationship` kinds with tags and a `title`, `description` and `technology` for every relationship of the kind, `tag`, `color name #hex` or `rgb(r, g, b)`; `notation 'what this kind means'` on a kind, for the legend (a view can say otherwise: `style a { notation '…' }`, `include a with { notation '…' }`) |
-| `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `summary` (what the box says, if it should differ from the description), `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'description' 'technology'`, both ways `a <-> b`, `-> b` from inside an element, `a -[kind]-> b` (or `a .kind b`), with `line`, `color`, `head`, `tail`; `extend a.b { }` for more children, tags, metadata and links, `extend a -> b 'title' { }` for a relationship's; strings in `'''three quotes'''` for text with quotes of its own; `metadata` values as lists (`regions ['us', 'eu']`) |
-| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`, and those of one kind `a -[kind]-> b`; `where` after any of them (`include * where kind is service and tag is not #old`, and after a relationship `-> a where source.tag is #x`: `kind`, `tag`, `metadata.key`, `is` / `is not`, `and`, `or`, `not`, brackets); `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`, then if you like how far apart rows and boxes are (`autoLayout LeftRight 120 110`); `global style name` and `global predicate name`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps; `variant sequence` draws them as a sequence diagram |
-| Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity`; `size`, `padding` and `textSize` from `xsmall` to `xlarge`; `multiple true` for a stack; `icon` from a URL or an SVG file beside the source (`icon ./icons/db.svg`), with `iconSize` and `iconPosition left / right / top / bottom` |
+| `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `summary` (what the box says, if it should differ from the description), `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'description' 'technology'`, both ways `a <-> b`, `-> b` from inside an element, `a -[kind]-> b` (or `a .kind b`), with `line`, `color`, `head`, `tail` (`normal`, `open`, `vee`, `crow`, `diamond`, `dot` and the hollow `o…` ones) and `link`s; `descriptionFile ./docs/a.md` for a description kept in a `.md` or `.txt` file beside the source; `extend a.b { }` for more children, tags, metadata and links, `extend a -> b 'title' { }` for a relationship's; strings in `'''three quotes'''` for text with quotes of its own; `metadata` values as lists (`regions ['us', 'eu']`) |
+| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`, and those of one kind `a -[kind]-> b`; `where` after any of them (`include * where kind is service and tag is not #old`, and after a relationship `-> a where source.tag is #x`: `kind`, `tag`, `metadata.key`, `is` / `is not`, `and`, `or`, `not`, brackets); `include a with { color red }`, and for the lines `include a -> b with { color red; line solid; title '…' }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`, then if you like how far apart rows and boxes are (`autoLayout LeftRight 120 110`); `global style name` and `global predicate name`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps; `variant sequence` draws them as a sequence diagram |
+| Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border` (`none` for no border), `opacity`; `size`, `padding` and `textSize` from `xsmall` to `xlarge`; `multiple true` for a stack; `icon` from a URL or an SVG file beside the source (`icon ./icons/db.svg`), with `iconSize` and `iconPosition left / right / top / bottom` |
 | `global` | `style name targets { }`, `styleGroup name { }`, `predicateGroup name { }`: rules with a name, for any view to ask for |
 | `import` | `import { a } from 'project'` is checked and otherwise unneeded: names are already global |
 
@@ -256,16 +258,15 @@ silently ignored, with the rest of the model still drawn:
 
 - deployment models and views, and `diff` blocks
 - `group` in a view (what it includes is shown, without the frame), `rank`,
-  `ortho` routing, manual layout, `with { }` after a relationship
+  `ortho` routing, manual layout
 - in a dynamic view, `opt`, `loop`, `alt` and `try` (their steps are shown
   as ordinary steps, in order)
 - the shapes `component`, `document`, `bucket` and `agent` (rectangles),
-  `border none`, the arrows `crow` and `vee` (drawn `open`), see-through
-  colors, `sizing fixed`
+  see-through colors, `sizing fixed`
 - the icons LikeC4 bundles (`tech:rust`, `aws:lambda`), icons from files
   that are not SVG and from `@/` aliases
-- `multiple` and `navigateTo` on a relationship, `descriptionFile`, links
-  on a kind or a view, `order`
+- `multiple` and `navigateTo` on a relationship, links on a kind or a
+  view, `order`
 
 Markdown in a description is shown as it is written.
 

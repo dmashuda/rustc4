@@ -80,6 +80,8 @@ struct DiagramDrawing {
         case .solid: StrokeStyle(lineWidth: width, lineJoin: .round)
         case .dashed: StrokeStyle(lineWidth: width, lineJoin: .round, dash: [6, 4])
         case .dotted: StrokeStyle(lineWidth: width, lineCap: .round, dash: [1.5, 4])
+        // No border: all gap, so nothing is drawn.
+        case .hidden: StrokeStyle(lineWidth: width, dash: [0, 1])
         }
     }
 

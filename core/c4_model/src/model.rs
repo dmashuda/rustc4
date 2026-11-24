@@ -51,6 +51,20 @@ pub enum Line {
     Solid,
     Dashed,
     Dotted,
+    /// Not drawn: `border none`, for a box. A relationship always has a line.
+    None,
+}
+
+impl Line {
+    pub(crate) fn parse(value: &str) -> Option<Line> {
+        Some(match value {
+            "solid" => Line::Solid,
+            "dashed" => Line::Dashed,
+            "dotted" => Line::Dotted,
+            "none" => Line::None,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +80,28 @@ pub enum Arrow {
     ODiamond,
     Dot,
     ODot,
+    /// A filled arrowhead with a notch in its back.
+    Vee,
+    /// A crow's foot: three lines spreading to the end.
+    Crow,
+}
+
+impl Arrow {
+    pub(crate) fn parse(value: &str) -> Option<Arrow> {
+        Some(match value {
+            "none" => Arrow::None,
+            "normal" => Arrow::Normal,
+            "onormal" => Arrow::ONormal,
+            "open" => Arrow::Open,
+            "diamond" => Arrow::Diamond,
+            "odiamond" => Arrow::ODiamond,
+            "dot" => Arrow::Dot,
+            "odot" => Arrow::ODot,
+            "vee" => Arrow::Vee,
+            "crow" => Arrow::Crow,
+            _ => return None,
+        })
+    }
 }
 
 /// One of five steps, for a box's `size`, `padding` and `textSize`.
@@ -233,6 +269,11 @@ pub struct Relation {
     pub notation: String,
     pub tags: Vec<String>,
     pub metadata: Vec<(String, String)>,
+    /// (url, title)
+    pub links: Vec<(String, String)>,
+    /// Written `a <-> b`: it goes both ways, and is as much one from its
+    /// target to its source.
+    pub both: bool,
     pub style: RelationStyle,
     pub origin: Origin,
 }
@@ -429,9 +470,17 @@ struct Builder<'a> {
     wanted: Vec<String>,
 }
 
-/// Whether a source is an image the others may name, rather than a model.
+/// Whether a source is something the others may name (an icon's image, a
+/// description's text), rather than part of the model.
 fn is_image(name: &str) -> bool {
-    name.to_ascii_lowercase().ends_with(".svg")
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".svg") || is_text(&name)
+}
+
+/// What a `descriptionFile` may be.
+fn is_text(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [".md", ".markdown", ".mdx", ".txt"].iter().any(|ext| name.ends_with(ext))
 }
 
 /// The name of the file a source means by a path written in it.
@@ -732,6 +781,36 @@ impl Builder<'_> {
         self.report(span, Severity::Error, message);
     }
 
+    /// The text of a `descriptionFile`: a text file among the sources,
+    /// named from the file that asks for it.
+    fn description_file(&mut self, path: &str, span: Span) -> Option<String> {
+        if !is_text(path) {
+            self.report(
+                span,
+                Severity::Warning,
+                format!(
+                    "A description from a file like '{path}' is not supported yet; use a .md or .txt file."
+                ),
+            );
+            return None;
+        }
+        let source = self.sources.get(span.file).map(|s| s.name.as_str()).unwrap_or_default();
+        let name = beside(source, path);
+        match self.sources.iter().find(|s| s.name == name) {
+            Some(file) => Some(file.text.clone()),
+            None => {
+                if !self.wanted.contains(&name) {
+                    self.wanted.push(name.clone());
+                }
+                self.error(
+                    span,
+                    format!("There is no file '{name}' for this description: check the path, or write the text as its description."),
+                );
+                None
+            }
+        }
+    }
+
     /// What an `icon` means: `Some(None)` for no icon (`icon none`),
     /// `None` when it could not be had, which is then reported.
     fn icon(&mut self, value: &str, span: Span) -> Option<Option<String>> {
@@ -798,22 +877,17 @@ impl Builder<'_> {
         None
     }
 
-    fn line(&mut self, value: &str, span: Span) -> Option<Line> {
-        match value {
-            "solid" => Some(Line::Solid),
-            "dashed" => Some(Line::Dashed),
-            "dotted" => Some(Line::Dotted),
-            // A border, not a line.
-            "none" => {
-                self.report(
-                    span,
-                    Severity::Warning,
-                    "'border none' is not supported yet; the border is drawn solid.".into(),
-                );
-                Some(Line::Solid)
+    /// `border`: whether it is a box's border, which may be `none`.
+    fn line(&mut self, value: &str, span: Span, border: bool) -> Option<Line> {
+        match Line::parse(value) {
+            Some(Line::None) if !border => {
+                self.error(span, "A relationship always has a line: use solid, dashed or dotted.".into());
+                None
             }
-            _ => {
-                self.error(span, format!("Unknown line '{value}': use solid, dashed or dotted."));
+            Some(line) => Some(line),
+            None => {
+                let or_none = if border { ", or none" } else { "" };
+                self.error(span, format!("Unknown line '{value}': use solid, dashed or dotted{or_none}."));
                 None
             }
         }
@@ -851,7 +925,7 @@ impl Builder<'_> {
                     }
                 }
                 "border" => {
-                    if let Some(line) = self.line(value, *span) {
+                    if let Some(line) = self.line(value, *span, true) {
                         style.border = line;
                     }
                 }
@@ -927,37 +1001,19 @@ impl Builder<'_> {
                     }
                 }
                 "line" => {
-                    if let Some(line) = self.line(value, *span) {
+                    if let Some(line) = self.line(value, *span, false) {
                         style.line = line;
                     }
                 }
                 "head" | "tail" => {
-                    let arrow = match value.as_str() {
-                        "none" => Arrow::None,
-                        "normal" => Arrow::Normal,
-                        "onormal" => Arrow::ONormal,
-                        "open" => Arrow::Open,
-                        "vee" | "crow" => {
-                            self.report(
-                                *span,
-                                Severity::Warning,
-                                format!("The arrow '{value}' is not supported yet; it is drawn as 'open'."),
-                            );
-                            Arrow::Open
-                        }
-                        "diamond" => Arrow::Diamond,
-                        "odiamond" => Arrow::ODiamond,
-                        "dot" => Arrow::Dot,
-                        "odot" => Arrow::ODot,
-                        _ => {
-                            self.error(
-                                *span,
-                                format!(
-                                    "Unknown arrow '{value}': use none, normal, onormal, open, diamond, odiamond, dot or odot."
-                                ),
-                            );
-                            continue;
-                        }
+                    let Some(arrow) = Arrow::parse(value) else {
+                        self.error(
+                            *span,
+                            format!(
+                                "Unknown arrow '{value}': use none, normal, onormal, open, vee, crow, diamond, odiamond, dot or odot."
+                            ),
+                        );
+                        continue;
                     };
                     if key == "head" {
                         style.head = arrow;
@@ -1043,6 +1099,13 @@ impl Builder<'_> {
             }
         };
         self.element_style(&def.style, &mut style);
+        let mut description = tidy(def.description.as_deref().unwrap_or_default());
+        if description.is_empty()
+            && let Some((path, span)) = &def.description_file
+            && let Some(text) = self.description_file(path, *span)
+        {
+            description = tidy(&text);
+        }
         let index = self.model.elements.len();
         self.model.elements.push(Element {
             fqn: fqn.clone(),
@@ -1054,7 +1117,7 @@ impl Builder<'_> {
                 .map(tidy)
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| def.name.clone()),
-            description: tidy(def.description.as_deref().unwrap_or_default()),
+            description,
             summary: tidy(def.summary.as_deref().unwrap_or_default()),
             technology: tidy(def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default()),
             notation: tidy(def.notation.as_deref().or(kind_notation.as_deref()).unwrap_or_default()),
@@ -1185,6 +1248,12 @@ impl Builder<'_> {
                         ),
                         tags,
                         metadata: def.metadata.clone(),
+                        links: def
+                            .links
+                            .iter()
+                            .map(|(url, title)| (url.clone(), title.clone().unwrap_or_default()))
+                            .collect(),
+                        both: def.both,
                         style,
                         origin: self.origin(def.span),
                     });
@@ -1235,6 +1304,11 @@ impl Builder<'_> {
                             }
                         }
                         rel.metadata.extend(def.metadata.iter().cloned());
+                        rel.links.extend(
+                            def.links
+                                .iter()
+                                .map(|(url, title)| (url.clone(), title.clone().unwrap_or_default())),
+                        );
                     }
                     if !found {
                         self.error(
@@ -1407,11 +1481,30 @@ impl Builder<'_> {
                             );
                             self.element_style(&style_only, &mut scratch);
                         }
-                        Predicate::Relation(RelExpr::Direct(a, b), _) => exprs.extend([a, b]),
-                        Predicate::Relation(
-                            RelExpr::Incoming(e) | RelExpr::Outgoing(e) | RelExpr::InOut(e),
-                            _,
-                        ) => exprs.push(e),
+                        Predicate::Relation(rel, _, with) => {
+                            match rel {
+                                RelExpr::Direct(a, b) => exprs.extend([a, b]),
+                                RelExpr::Incoming(e) | RelExpr::Outgoing(e) | RelExpr::InOut(e) => {
+                                    exprs.push(e)
+                                }
+                            }
+                            // What `with` says of the lines: looks, checked
+                            // as a relationship's are; words are as written.
+                            let mut scratch = RelationStyle::default();
+                            let style_only = StyleProps(
+                                with.0
+                                    .iter()
+                                    .filter(|(k, ..)| {
+                                        !matches!(
+                                            k.as_str(),
+                                            "title" | "description" | "technology" | "notes"
+                                        )
+                                    })
+                                    .cloned()
+                                    .collect(),
+                            );
+                            self.relation_style(&style_only, &mut scratch);
+                        }
                     }
                 }
             }

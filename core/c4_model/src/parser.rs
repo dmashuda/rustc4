@@ -551,16 +551,11 @@ impl Parser {
                     self.next();
                     return self.metadata_block(&mut el.metadata);
                 }
-                // The description, kept in a file of its own: nothing here
-                // reads files, and a model is not always beside any.
+                // The description, kept in a file of its own.
                 ("descriptionFile", Tok::Raw(_) | Tok::Str(_)) => {
-                    self.errors.push(ParseError {
-                        span: self.span(),
-                        message: "'descriptionFile' is not supported yet; write the text as its description."
-                            .into(),
-                    });
                     self.next();
-                    self.next();
+                    let at = self.span();
+                    el.description_file = Some((self.value()?, at));
                     return Ok(());
                 }
                 ("link", Tok::Raw(_) | Tok::Str(_)) => {
@@ -630,6 +625,7 @@ impl Parser {
             metadata: Vec::new(),
             notation: None,
             both,
+            links: Vec::new(),
         };
         // Up to three strings: title, description, technology.
         rel.title = self.opt_string();
@@ -663,8 +659,9 @@ impl Parser {
                     }
                     "link" => {
                         p.next();
-                        p.value()?;
-                        p.opt_string();
+                        let url = p.value()?;
+                        let title = p.opt_string();
+                        rel.links.push((url, title));
                         Ok(())
                     }
                     _ if STRING_PROPS.contains(&word.as_str()) => {
@@ -1138,14 +1135,12 @@ impl Parser {
                 None => of_kind,
             });
         }
+        let mut with = StyleProps::default();
         if self.is_word("with") && *self.peek_at(1) == Tok::LBrace {
-            self.warn_here(
-                "'with' after a relationship is not supported yet; the line is drawn as the model has it.",
-            );
             self.next();
-            self.skip_block()?;
+            self.block(|p| p.style_prop(&mut with))?;
         }
-        Ok(Predicate::Relation(rel, cond))
+        Ok(Predicate::Relation(rel, cond, with))
     }
 
     /// The arrow of a relationship predicate, if one is next: whether it
@@ -1468,8 +1463,8 @@ mod tests {
         assert_eq!(view.of.as_ref().unwrap().text(), "cloud.api");
         let ViewRule::Include(first) = &view.rules[0] else { panic!() };
         assert_eq!(first.len(), 4);
-        assert!(matches!(first[2], Predicate::Relation(RelExpr::InOut(_), _)));
-        assert!(matches!(first[3], Predicate::Relation(RelExpr::Direct(..), _)));
+        assert!(matches!(first[2], Predicate::Relation(RelExpr::InOut(_), ..)));
+        assert!(matches!(first[3], Predicate::Relation(RelExpr::Direct(..), ..)));
         let ViewRule::Exclude(second) = &view.rules[1] else { panic!() };
         assert!(matches!(&second[0], Predicate::Element { expr: ElementExpr::Kind { eq: true, .. }, .. }));
         assert!(matches!(&second[1], Predicate::Element { expr: ElementExpr::Descendants(_), .. }));

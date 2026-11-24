@@ -125,6 +125,7 @@ fn line_of(line: Line) -> LineStyle {
         Line::Solid => LineStyle::Solid,
         Line::Dashed => LineStyle::Dashed,
         Line::Dotted => LineStyle::Dotted,
+        Line::None => LineStyle::Hidden,
     }
 }
 
@@ -756,6 +757,27 @@ fn end_mark(points: &mut [(f64, f64)], arrow: Arrow) -> Option<Marker> {
             },
             12.5,
         ),
+        // A filled head with a notch in its back.
+        Arrow::Vee => (
+            Marker {
+                points: vec![at(0.0, 0.0), at(11.0, 5.0), at(7.0, 0.0), at(11.0, -5.0)],
+                radius: 0.0,
+                filled: true,
+                closed: true,
+            },
+            6.5,
+        ),
+        // A crow's foot: from a point back along the line, out to either
+        // side of where it ends. The line itself is the middle toe.
+        Arrow::Crow => (
+            Marker {
+                points: vec![at(0.0, 6.0), at(11.0, 0.0), at(0.0, -6.0)],
+                radius: 0.0,
+                filled: false,
+                closed: false,
+            },
+            0.0,
+        ),
         Arrow::Dot | Arrow::ODot => (
             Marker { points: vec![at(4.5, 0.0)], radius: 4.5, filled: arrow == Arrow::Dot, closed: true },
             8.5,
@@ -1273,5 +1295,33 @@ mod tests {
         assert_eq!(legend.nodes[0].x, legend.nodes[1].x);
         assert!(legend.nodes[1].y > legend.nodes[0].y);
         assert!(marked.width >= legend.x + legend.width);
+    }
+
+    #[test]
+    fn crow_and_vee_ends_and_a_box_without_a_border() {
+        let d = drawn(
+            "specification { element box }
+            model {
+                a = box { style { border none } }
+                b = box
+                a -> b { head crow; tail vee }
+            }
+            views { view index { include * } }",
+        );
+        assert_eq!(d.nodes[0].border, LineStyle::Hidden);
+        assert_eq!(d.nodes[1].border, LineStyle::Solid);
+        let edge = &d.edges[0];
+        // The tail's mark first: a filled head with a notch, at `a`.
+        let (vee, crow) = (&edge.markers[0], &edge.markers[1]);
+        assert!(vee.filled && vee.closed && vee.points.len() == 4);
+        assert_eq!(vee.points[0].y, d.nodes[0].y + d.nodes[0].height);
+        // A crow's foot is open, and spreads to where the line ends: its
+        // two outer points are on the box, the middle one back up the line.
+        assert!(!crow.filled && !crow.closed && crow.points.len() == 3);
+        let top = d.nodes[1].y;
+        assert_eq!((crow.points[0].y, crow.points[2].y), (top, top));
+        assert!(crow.points[1].y < top);
+        // The line runs on to the box: it is the foot's middle toe.
+        assert_eq!(edge.path.last().unwrap().y, top);
     }
 }
