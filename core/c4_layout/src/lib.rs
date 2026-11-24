@@ -804,7 +804,7 @@ mod tests {
                 ui = component 'Web app' 'What the customer sees' 'React' { style { shape browser; color brand } }
                 api = component 'API'
                 db = component 'Database' { style { shape storage } }
-                ui -> api 'calls' 'HTTPS'
+                ui -> api 'calls' { technology 'HTTPS' }
                 api -> db 'reads and writes'
             }
             customer -> shop.ui 'browses'

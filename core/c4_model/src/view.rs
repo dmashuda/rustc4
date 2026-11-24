@@ -678,7 +678,7 @@ impl Computing<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Direction, IconPosition, Severity, Size, Source, load};
+    use crate::{Arrow, Direction, IconPosition, Severity, Size, Source, load};
 
     const SHOP: &str = "
         specification {
@@ -1207,6 +1207,206 @@ global { style old element.kind = box { notation 'Old' } }"
         };
         assert_eq!(said("styled"), ["Deprecated", "Said last", ""]);
         assert_eq!(said("shared"), ["Old", "Old", ""]);
+    }
+
+    #[test]
+    fn the_rest_of_how_likec4_writes_a_model() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification {
+  tag slow
+  tag infra
+  tag extra
+  color brand rgb(255, 128, 0)
+  color brand2 rgb(0 128 255)
+  element box { #infra }
+  relationship async {
+    #slow
+    title 'Asynchronous'
+    description 'Does not wait'
+    technology 'Kafka'
+  }
+}
+model {
+  a = box 'A' {
+    #extra
+    description '''
+      Says \"hello\", and it's **bold**.
+    '''
+    metadata {
+      owner 'core'
+      regions ['us', 'eu']
+    }
+  }
+  b = box 'B' { style { color brand } }
+  c = box 'C'
+  a <-> b 'talk'
+  a -[async]<-> c
+  b .async c 'by hand'
+  b -> c 'opens' 'In a browser' 'HTTPS'
+  b -> a 'two' 'Only a description'
+  extend a.nothing
+  extend a {
+    #slow #extra
+    metadata { regions 'ap' }
+    link https://example.com 'More'
+    inner = box
+  }
+  extend b -> c 'opens' {
+    #slow
+    metadata { latency '150ms' }
+  }
+}
+views {
+  view regions { include * where metadata.regions is 'eu' }
+}"
+            .into(),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.to_string()).collect();
+        assert_eq!(messages, ["m.c4:33:10: error: There is no element 'a.nothing' to extend."]);
+        let m = &ws.model;
+        let a = m.element("a").unwrap();
+        assert_eq!(a.description, "Says \"hello\", and it's **bold**.");
+        // Its kind's tags, its own, and what `extend` adds, once each.
+        assert_eq!(a.tags, ["infra", "extra", "slow"]);
+        let pairs = |list: &[(String, String)]| {
+            list.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(pairs(&a.metadata), "owner=core regions=us regions=eu regions=ap");
+        assert_eq!(a.links, [("https://example.com".to_string(), "More".to_string())]);
+        assert!(m.element("a.inner").is_some());
+        assert_eq!(m.colors["brand"], "#ff8000");
+        assert_eq!(m.colors["brand2"], "#0080ff");
+
+        let rel = |i: usize| &m.relations[i];
+        // Both ways: a mark at each end.
+        assert_eq!((rel(0).style.head, rel(0).style.tail), (Arrow::Normal, Arrow::Normal));
+        assert_eq!((rel(1).kind.as_deref(), rel(1).style.tail), (Some("async"), Arrow::Normal));
+        // What the kind says, unless the relationship does.
+        assert_eq!(
+            (rel(1).title.as_str(), rel(1).description.as_str(), rel(1).technology.as_str()),
+            ("Asynchronous", "Does not wait", "Kafka")
+        );
+        assert_eq!((rel(2).kind.as_deref(), rel(2).title.as_str()), (Some("async"), "by hand"));
+        assert_eq!(rel(2).tags, ["slow"]);
+        // Title, description, technology, in that order.
+        assert_eq!(
+            (rel(3).title.as_str(), rel(3).description.as_str(), rel(3).technology.as_str()),
+            ("opens", "In a browser", "HTTPS")
+        );
+        assert_eq!((rel(4).description.as_str(), rel(4).technology.as_str()), ("Only a description", ""));
+        assert_eq!(rel(3).tags, ["slow"]);
+        assert_eq!(pairs(&rel(3).metadata), "latency=150ms");
+        // One of a list is enough.
+        assert_eq!(shows(&ws, "regions"), "a");
+    }
+
+    #[test]
+    fn relationship_predicates_name_a_kind_and_groups_still_include() {
+        let ws = load(&[Source {
+            name: "fleet.c4".into(),
+            text: format!(
+                "{FLEET}
+views {{
+  view kinded {{ include api -[async]-> * }}
+  view dotted {{ include * .async jobs }}
+  view into {{ include -[async]-> jobs }}
+  view both {{ include api -[async]-> * where tag is not #old }}
+  view grouped {{
+    group 'Front' {{
+      color amber
+      opacity 20%
+      include web
+      group {{ include api }}
+    }}
+    include db
+  }}
+}}"
+            ),
+        }]);
+        assert_eq!(shows(&ws, "kinded"), "api jobs");
+        assert_eq!(shows(&ws, "dotted"), "api jobs");
+        assert_eq!(shows(&ws, "into"), "api jobs");
+        assert_eq!(shows(&ws, "both"), "");
+        assert_eq!(shows(&ws, "grouped"), "web api db");
+        // Only the group is not drawn, and says so, once.
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["'group' is not supported yet; what it includes is shown without a frame around it."]
+        );
+    }
+
+    #[test]
+    fn more_that_is_read_and_not_drawn_is_a_warning() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification {
+  color glass rgba(0, 0, 0, 50%)
+  color glass2 #00000080
+  tag t { color #f00 }
+  deploymentNode vm { notation 'VM' }
+  element box { link https://example.com }
+  relationship r { multiple true }
+}
+model {
+  a = box { descriptionFile ./a.md; style { shape document; border none } }
+  b = box
+  a -> b { head crow; navigateTo v }
+}
+diff plan 'A plan' { remove { a } }
+views {
+  view v {
+    link https://example.com
+    order 2
+    routing ortho
+    rank same { a, b }
+    group 'G' { include a }
+    include a -> b with { color red }
+  }
+  dynamic view d {
+    a -> b { metadata { k 'v' } }
+    opt 'sometimes' { a -> b }
+    alt { when 'x' { a -> b } else { b -> a } }
+    try { a -> b } catch 'failed' { b -> a } finally { a -> a }
+  }
+}"
+            .into(),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert!(ws.diagnostics.iter().all(|d| d.severity == Severity::Warning), "{messages:#?}");
+        assert_eq!(
+            messages,
+            [
+                "2:A see-through color ('rgba(0,0,0,50%)') is not supported yet; it is drawn solid.",
+                "3:A see-through color ('#00000080') is not supported yet; it is drawn solid.",
+                "4:What a tag is given in '{ }' (its color) is not supported yet; it is ignored.",
+                "5:'deploymentNode' kinds are not supported yet; this one is ignored.",
+                "6:A link on a kind is not supported yet; give it to the elements themselves.",
+                "7:'multiple' on a relationship is not supported yet; relationships between the same two boxes are drawn as one line.",
+                "10:'descriptionFile' is not supported yet; write the text as its description.",
+                "10:The shape 'document' is not supported yet; it is drawn as a rectangle.",
+                "10:'border none' is not supported yet; the border is drawn solid.",
+                "12:The arrow 'crow' is not supported yet; it is drawn as 'open'.",
+                "12:'navigateTo' on a relationship is not supported yet; it goes nowhere.",
+                "14:'diff' blocks are not supported yet; this one is ignored.",
+                "17:A link on a view is not supported yet; it is not shown anywhere.",
+                "18:'order' is not supported yet; views are listed in the order they are written.",
+                "19:'ortho' routing is not supported yet; lines are drawn as curves.",
+                "20:'rank' is not supported yet; the layout chooses the rows.",
+                "21:'group' is not supported yet; what it includes is shown without a frame around it.",
+                "22:'with' after a relationship is not supported yet; the line is drawn as the model has it.",
+                "25:'metadata' on a step is not supported yet; it is ignored.",
+                "26:Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
+                "27:Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
+                "28:Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
+            ]
+        );
+        // And what could be drawn is: every step of every block, in order.
+        assert_eq!(shows(&ws, "v"), "a b");
+        let steps = ws.model.compute_view("d").unwrap();
+        let said: Vec<&str> = steps.edges.iter().map(|e| e.step.as_str()).collect();
+        assert_eq!(said, ["1", "2", "3", "4", "5", "6", "7"]);
     }
 
     /// The model the `where` and `global` tests ask about.
