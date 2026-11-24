@@ -107,6 +107,8 @@ pub struct Element {
     pub kind: String,
     pub title: String,
     pub description: String,
+    /// What its box says, if not the description.
+    pub summary: String,
     pub technology: String,
     pub tags: Vec<String>,
     /// (url, title)
@@ -116,6 +118,13 @@ pub struct Element {
     pub children: Vec<usize>,
     pub style: ElementStyle,
     pub origin: Origin,
+}
+
+impl Element {
+    /// What its box says: the summary, or the description if it has none.
+    pub fn summary_or_description(&self) -> &str {
+        if self.summary.is_empty() { &self.description } else { &self.summary }
+    }
 }
 
 /// Where something was written: in a model gathered from many
@@ -660,6 +669,7 @@ impl Builder<'_> {
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| def.name.clone()),
             description: tidy(def.description.as_deref().unwrap_or_default()),
+            summary: tidy(def.summary.as_deref().unwrap_or_default()),
             technology: tidy(def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default()),
             tags: def.tags.clone(),
             links: def
@@ -847,16 +857,19 @@ impl Builder<'_> {
         let source = self.find(&def.source, None);
         let target = self.find(&def.target, None);
         let (source, target) = (source?, target?);
-        if self.model.is_ancestor_or_self(source, target) || self.model.is_ancestor(target, source) {
-            self.error(def.span, "A step needs two different elements, neither inside the other.".into());
+        // To itself is a step (something it does by itself); to what it is
+        // part of, or contains, is not.
+        if self.model.is_ancestor(source, target) || self.model.is_ancestor(target, source) {
+            self.error(def.span, "A step cannot go between an element and something inside it: name two elements side by side, or one twice for a step it takes alone.".into());
             return None;
         }
         // An answer going back is not the relationship that goes forward.
         let modelled = (!def.backward)
             .then(|| {
                 let exact = self.model.relations.iter().find(|r| r.source == source && r.target == target);
+                // Nothing inside an element speaks for a step it takes alone.
                 exact.or_else(|| {
-                    self.model.relations.iter().find(|r| {
+                    self.model.relations.iter().filter(|_| source != target).find(|r| {
                         self.model.is_ancestor_or_self(source, r.source)
                             && self.model.is_ancestor_or_self(target, r.target)
                     })
@@ -917,7 +930,7 @@ impl Builder<'_> {
                                     .filter(|(k, ..)| {
                                         !matches!(
                                             k.as_str(),
-                                            "title" | "description" | "technology" | "navigateTo"
+                                            "title" | "description" | "summary" | "technology" | "navigateTo"
                                         )
                                     })
                                     .cloned()

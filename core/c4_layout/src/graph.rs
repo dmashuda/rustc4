@@ -36,6 +36,8 @@ const MARGIN: f64 = 24.0;
 const STUB: f64 = 14.0;
 /// A label sits this far to the side of its line.
 const LABEL_GAP: f64 = 7.0;
+/// A line from a box to itself: how far its loop reaches out of the side.
+const LOOP: f64 = 26.0;
 
 pub(crate) struct InNode {
     /// Its group: an earlier node.
@@ -211,7 +213,23 @@ pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -
         }
     }
     let real_count = g.nodes.len();
-    for (i, edge) in edges.iter().enumerate() {
+    // A line from a box to itself is a loop out of its side. It takes no
+    // part in ranking or ordering; the box only reaches further to the
+    // side (before turning: to the right), for the loop and its words.
+    let mut loops: Vec<usize> = Vec::new();
+    let mut room = vec![0.0; nodes.len()];
+    for (i, edge) in edges.iter().enumerate().filter(|(_, e)| e.source == e.target) {
+        loops.push(i);
+        let words = if horizontal { edge.label_h } else { edge.label_w };
+        let need = LOOP + if words > 0.0 { LABEL_GAP + words } else { 0.0 };
+        room[edge.source] = f64::max(room[edge.source], need);
+    }
+    for (i, &extra) in room.iter().enumerate() {
+        if node_of[i] != usize::MAX {
+            g.nodes[node_of[i]].wr += extra;
+        }
+    }
+    for (i, edge) in edges.iter().enumerate().filter(|(_, e)| e.source != e.target) {
         let end = |g: &mut Graph, input: usize, late: bool| -> usize {
             if node_of[input] != usize::MAX {
                 return node_of[input];
@@ -276,7 +294,7 @@ pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -
     for i in 0..nodes.len() {
         out_nodes.push(if node_of[i] != usize::MAX {
             let n = &g.nodes[node_of[i]];
-            turn_rect(n.x - n.wl, n.y - n.h / 2.0, n.x + n.wr, n.y + n.h / 2.0)
+            turn_rect(n.x - n.wl, n.y - n.h / 2.0, n.x + n.wr - room[i], n.y + n.h / 2.0)
         } else {
             let c = &g.clusters[cluster_of[i]];
             turn_rect(c.left, c.top, c.right, c.bottom)
@@ -352,6 +370,35 @@ pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -
             pts.reverse();
         }
         pts.dedup_by(|p, q| (p.0 - q.0).abs() < 0.01 && (p.1 - q.1).abs() < 0.01);
+        routes[input] = Some(Route { points: pts.into_iter().map(|(x, y)| turn(x, y)).collect(), label });
+    }
+    // Several loops on one box share its side, one under another.
+    for (k, &input) in loops.iter().enumerate() {
+        let edge = &edges[input];
+        let on_box = loops.iter().filter(|&&j| edges[j].source == edge.source).count();
+        let nth = loops[..k].iter().filter(|&&j| edges[j].source == edge.source).count();
+        let (right, top, h) = if node_of[edge.source] != usize::MAX {
+            let n = &g.nodes[node_of[edge.source]];
+            (n.x + n.wr - room[edge.source], n.y - n.h / 2.0, n.h)
+        } else {
+            let c = &g.clusters[cluster_of[edge.source]];
+            (c.right, c.top, c.bottom - c.top)
+        };
+        let slice = h / on_box as f64;
+        let middle = top + slice * (nth as f64 + 0.5);
+        let half = (slice / 2.0 - 4.0).clamp(2.0, 14.0);
+        let (words_w, words_h) =
+            if horizontal { (edge.label_h, edge.label_w) } else { (edge.label_w, edge.label_h) };
+        let label = (words_w > 0.0).then(|| {
+            let x = right + LOOP + LABEL_GAP;
+            turn_rect(x, middle - words_h / 2.0, x + words_w, middle + words_h / 2.0)
+        });
+        let pts = [
+            (right, middle - half),
+            (right + LOOP, middle - half),
+            (right + LOOP, middle + half),
+            (right, middle + half),
+        ];
         routes[input] = Some(Route { points: pts.into_iter().map(|(x, y)| turn(x, y)).collect(), label });
     }
     let mut out_edges: Vec<Route> =

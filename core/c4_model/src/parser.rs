@@ -429,7 +429,7 @@ impl Parser {
                 match word.as_str() {
                     "title" => el.title = Some(value),
                     "description" => el.description = Some(value),
-                    "summary" if el.description.is_none() => el.description = Some(value),
+                    "summary" => el.summary = Some(value),
                     "technology" => el.technology = Some(value),
                     _ => {}
                 }

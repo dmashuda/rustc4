@@ -634,4 +634,65 @@ mod tests {
         // Any other view has no lines down.
         assert!(diagram("index").lifelines.is_empty());
     }
+
+    #[test]
+    fn a_step_it_takes_alone_is_a_loop_beside_it() {
+        for variant in ["variant sequence", "autoLayout TopBottom", "autoLayout LeftRight"] {
+            let source = SHOP.replace(
+                "view index { include * }",
+                &format!(
+                    "view index {{ include * }}
+                    dynamic view buying {{
+                        {variant}
+                        customer -> shop.ui 'opens the shop'
+                        shop.ui -> shop.api
+                        shop.api -> shop.api 'checks the stock'
+                        shop.api -> shop.db
+                        shop.db -> shop.db 'locks a row'
+                    }}"
+                ),
+            );
+            let ws = load(&[Source { name: "shop.c4".into(), text: source }]);
+            assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+            let d = layout(&ws.model.compute_view("buying").unwrap(), &ws.model.colors);
+            for (step, on) in [("shop.api->shop.api#3", "shop.api"), ("shop.db->shop.db#5", "shop.db")] {
+                let edge = d.edges.iter().find(|e| e.id == step).expect(step);
+                let start = edge.path[0];
+                // Out of one side of it and back to the same side.
+                let at = |p: Point| match d.lifelines.iter().find(|l| l.node == on) {
+                    Some(line) => p.x == line.from.x,
+                    None => {
+                        let n = d.nodes.iter().find(|n| n.id == on).unwrap();
+                        let side = if variant.ends_with("TopBottom") {
+                            p.x == n.x + n.width
+                        } else {
+                            p.y == n.y + n.height
+                        };
+                        side && n.x <= p.x && p.x <= n.x + n.width && n.y <= p.y && p.y <= n.y + n.height
+                    }
+                };
+                assert!(at(start) && at(edge.markers[0].points[0]), "{variant}: {step} {edge:?}");
+                // Its words beside it (below, when lines go across), clear of every
+                // box and inside the drawing.
+                let label = &edge.labels[0];
+                let half = text::width(&label.text, label.size, label.bold) / 2.0;
+                let (left, right) = match label.anchor {
+                    Anchor::Start => (label.x, label.x + 2.0 * half),
+                    _ => (label.x - half, label.x + half),
+                };
+                let beside = match variant.ends_with("LeftRight") {
+                    true => label.y - label.size > start.y,
+                    false => left > start.x,
+                };
+                assert!(beside && right < d.width && label.y < d.height, "{variant}: {label:?}");
+                for n in &d.nodes {
+                    let overlaps = left < n.x + n.width
+                        && right > n.x
+                        && label.y > n.y
+                        && label.y - label.size < n.y + n.height;
+                    assert!(!overlaps, "{variant}: {label:?} over {}", n.id);
+                }
+            }
+        }
+    }
 }

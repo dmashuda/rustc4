@@ -56,7 +56,12 @@ thin bindings, renderers that only draw.
   step is its own line, numbered in its label (`3`, `3.1` inside
   `parallel`), drawn by the same layout. A step takes its words and looks
   from the relationship the model has between its two ends unless it says
-  otherwise; one written backwards (`a <- b`) takes nothing.
+  otherwise; one written backwards (`a <- b`) takes nothing. A step an
+  element takes alone (`a -> a`) is a loop out of its side, with room
+  kept for its words.
+- **A box says its `summary`**, or its description if it has none; the
+  details panel gives the description (the summary if there is none), and
+  `describe` gives both.
 - **`variant sequence`** is the same steps laid out by
   `c4_layout/src/sequence.rs` instead of `graph.rs`: the steps' ends side
   by side in the order they first appear (no groups, nobody who only

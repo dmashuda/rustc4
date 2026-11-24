@@ -148,7 +148,7 @@ impl Model {
                 parent: parent.map(|p| self.elements[p].fqn.clone()),
                 kind: el.kind.clone(),
                 title: el.title.clone(),
-                description: el.description.clone(),
+                description: el.summary_or_description().to_string(),
                 technology: el.technology.clone(),
                 tags: el.tags.clone(),
                 shape: style.shape,
@@ -176,7 +176,7 @@ impl Model {
                 for (key, value, _) in &props.0 {
                     match key.as_str() {
                         "title" => node.title = value.clone(),
-                        "description" => node.description = value.clone(),
+                        "description" | "summary" => node.description = value.clone(),
                         "technology" => node.technology = value.clone(),
                         "navigateTo" if self.view_def(value).is_some() => {
                             node.navigate_to = Some(value.clone())
@@ -204,6 +204,9 @@ impl Model {
             let relations = (0..self.relations.len())
                 .filter(|&r| {
                     let rel = &self.relations[r];
+                    if step.source == step.target {
+                        return rel.source == step.source && rel.target == step.target;
+                    }
                     self.is_ancestor_or_self(step.source, rel.source)
                         && self.is_ancestor_or_self(step.target, rel.target)
                 })
@@ -590,6 +593,36 @@ mod tests {
     }
 
     #[test]
+    fn a_box_says_its_summary_and_keeps_the_description_for_later() {
+        let source = SHOP
+            .replace(
+                "api = component 'API' { #next }",
+                "api = component 'API' {
+                    #next
+                    summary 'Takes orders'
+                    description 'Takes orders, checks them against the stock and hands them on.'
+                }",
+            )
+            .replace(
+                "include customer, -> shop.api ->",
+                "include customer, shop.ui with { summary 'Shop front' }, -> shop.api ->",
+            );
+        let ws = load(&[Source { name: "shop.c4".into(), text: source }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        let api = &ws.model.elements[ws.model.index_of("shop.api").unwrap()];
+        assert_eq!(
+            (api.summary.as_str(), api.description.as_str()),
+            ("Takes orders", "Takes orders, checks them against the stock and hands them on.")
+        );
+        let view = ws.model.compute_view("picked").unwrap();
+        let said = |id: &str| view.nodes.iter().find(|n| n.id == id).unwrap().description.as_str();
+        assert_eq!(said("shop.api"), "Takes orders");
+        // No summary: the description. One given in the view wins.
+        assert_eq!(said("shop.ui"), "Shop front");
+        assert_eq!(said("shop.db"), "");
+    }
+
+    #[test]
     fn a_landscape_lifts_relationships_to_what_shows() {
         let ws = shop();
         let view = ws.model.compute_view("index").unwrap();
@@ -681,6 +714,7 @@ mod tests {
                     shop.ui <- shop.api 'order number' { line solid }
                 }
                 customer <- shop.ui -> shop.api 'asks again'
+                shop.api -> shop.api 'checks the stock'
                 include shop
                 variant sequence
                 shop -> shop.api
@@ -692,8 +726,8 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "shop.c4:40:17: error: A step needs two different elements, neither inside the other.",
-                "shop.c4:41:17: error: There is no element 'nobody'.",
+                "shop.c4:41:17: error: A step cannot go between an element and something inside it: name two elements side by side, or one twice for a step it takes alone.",
+                "shop.c4:42:17: error: There is no element 'nobody'.",
             ]
         );
         assert!(ws.model.view_ids().contains(&"checkout"));
@@ -716,6 +750,8 @@ mod tests {
                 // An answer going back is not the relationship going forward.
                 "shop.ui->customer#5 | 5",
                 "shop.ui->shop.api#6 | 6. asks again",
+                // A step it takes alone.
+                "shop.api->shop.api#7 | 7. checks the stock",
             ]
         );
         assert_eq!(

@@ -51,6 +51,7 @@ pub struct ElementDef {
     pub span: Span,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub summary: Option<String>,
     pub technology: Option<String>,
     pub tags: Vec<String>,
     /// (url, title)

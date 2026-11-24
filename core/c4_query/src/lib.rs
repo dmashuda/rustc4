@@ -138,8 +138,8 @@ pub fn overview(model: &Model) -> String {
             if inside > 0 {
                 line.push_str(&format!(", {inside} inside"));
             }
-            if !el.description.is_empty() {
-                line.push_str(&format!(": {}", brief(&el.description)));
+            if !el.summary_or_description().is_empty() {
+                line.push_str(&format!(": {}", brief(el.summary_or_description())));
             }
             line
         })
@@ -186,7 +186,7 @@ fn hits(model: &Model, query: &str, kind: Option<&str>, tag: Option<&str>) -> Ve
             el.metadata.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(" ")
         )
         .to_lowercase();
-        let description = el.description.to_lowercase();
+        let description = format!("{} {}", el.summary, el.description).to_lowercase();
         let (mut matched, mut score) = (0u32, 0u32);
         for word in &words {
             let points = if name == *word || title == *word {
@@ -230,8 +230,8 @@ pub fn search(model: &Model, query: &str, kind: Option<&str>, tag: Option<&str>,
                 if !el.technology.is_empty() {
                     line.push_str(&format!(" [{}]", el.technology));
                 }
-                if !el.description.is_empty() {
-                    line.push_str(&format!(": {}", brief(&el.description)));
+                if !el.summary_or_description().is_empty() {
+                    line.push_str(&format!(": {}", brief(el.summary_or_description())));
                 }
                 line
             })
@@ -292,6 +292,7 @@ pub fn element(model: &Model, asked: &str) -> Result<String, String> {
         }
     };
     line("Technology", el.technology.clone());
+    line("Summary", el.summary.replace('\n', " "));
     line("Description", el.description.replace('\n', " "));
     line("Tags", el.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
     line("Written in", el.origin.to_string());

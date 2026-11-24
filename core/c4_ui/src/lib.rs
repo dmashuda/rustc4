@@ -634,7 +634,8 @@ impl C4Ui {
                     title: el.title.clone(),
                     subtitle: format!("{} · {}", el.kind, el.fqn),
                     technology: el.technology.clone(),
-                    description: el.description.clone(),
+                    description: if el.description.is_empty() { &el.summary } else { &el.description }
+                        .clone(),
                     tags: el.tags.clone(),
                     links: el
                         .links
