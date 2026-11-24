@@ -335,7 +335,7 @@ mod tests {
     fn checks_and_lists() {
         assert_eq!(
             rustc4(&["check", "examples/shop.c4"]),
-            (0, "ok: 14 elements, 15 relationships, 5 views\n".into(), String::new())
+            (0, "ok: 14 elements, 15 relationships, 6 views\n".into(), String::new())
         );
         // The other example: LikeC4's own "Big Bank", as LikeC4 writes it.
         assert_eq!(
@@ -345,7 +345,7 @@ mod tests {
         let (code, out, _) = rustc4(&["views", "examples/shop.c4"]);
         assert_eq!(code, 0);
         assert_eq!(out.lines().next(), Some("index\tLandscape"));
-        assert_eq!(out.lines().count(), 5);
+        assert_eq!(out.lines().count(), 6);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
         let out_dir = dir.to_str().unwrap();
         let (code, out, err) = rustc4(&["export", "svg", "examples/shop.c4", "-o", out_dir]);
         assert_eq!((code, err.as_str()), (0, ""));
-        assert_eq!(out.lines().count(), 5);
+        assert_eq!(out.lines().count(), 6);
         let svg = std::fs::read_to_string(dir.join("shop.svg")).unwrap();
         assert!(svg.starts_with("<svg ") && svg.contains("Storefront"));
 
@@ -389,7 +389,7 @@ mod tests {
         let dir = scratch("site");
         let (code, out, err) = rustc4(&["build", "examples/shop.c4", "-o", dir.to_str().unwrap()]);
         assert_eq!((code, err.as_str()), (0, ""));
-        assert!(out.ends_with(": 10 files, 5 views\n"), "{out}");
+        assert!(out.ends_with(": 11 files, 6 views\n"), "{out}");
         for file in [
             "index.html",
             "style.css",
@@ -419,7 +419,10 @@ mod tests {
         assert!(rustc4(&["check", "nowhere"]).2.starts_with("rustc4: nowhere: "));
         let (code, _, err) = rustc4(&["export", "svg", "examples/shop.c4", "--view", "nope"]);
         assert_eq!(code, 2);
-        assert_eq!(err, "rustc4: there is no view 'nope' (there are: index, shop, api, orders, checkout)\n");
+        assert_eq!(
+            err,
+            "rustc4: there is no view 'nope' (there are: index, shop, api, orders, checkout, checkoutSequence)\n"
+        );
         assert_eq!(rustc4(&["frobnicate"]).2, "rustc4: unknown command 'frobnicate' (try --help)\n");
     }
 
@@ -442,7 +445,7 @@ mod tests {
         assert!(out.ends_with("all.json: 2 files\n"), "{out}");
         // The bundle reads back as the model it was made from.
         let (_, out, _) = rustc4(&["check", bundle.to_str().unwrap()]);
-        assert_eq!(out, "ok: 15 elements, 16 relationships, 5 views\n");
+        assert_eq!(out, "ok: 15 elements, 16 relationships, 6 views\n");
         assert_eq!(
             rustc4(&["bundle", "examples/shop.c4"]).2,
             "rustc4: bundle needs somewhere to write: -o <file.json>\n"

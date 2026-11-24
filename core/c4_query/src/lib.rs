@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn an_overview_to_start_from() {
         let text = overview(&shop());
-        assert!(text.starts_with("14 elements, 15 relationships, 5 views.\nKinds: service 5, "), "{text}");
+        assert!(text.starts_with("14 elements, 15 relationships, 6 views.\nKinds: service 5, "), "{text}");
         assert!(text.contains("\n- shop (Shop, system), 9 inside: Sells things online"), "{text}");
         assert!(text.contains("\n- customer (Customer, actor): Browses the catalogue and places orders"));
     }

@@ -730,11 +730,18 @@ mod tests {
         assert_eq!(screen.description, "The shop and everything around it");
         assert_eq!(
             texts(&screen.views),
-            ["Landscape", "Inside the shop", "Inside the API", "An order, end to end", "Placing an order"]
+            [
+                "Landscape",
+                "Inside the shop",
+                "Inside the API",
+                "An order, end to end",
+                "Placing an order",
+                "Placing an order, as a sequence"
+            ]
         );
         assert_eq!(screen.views.iter().filter(|v| v.selected).count(), 1);
         assert!(screen.views[0].selected && screen.views[0].id == "view.index");
-        assert_eq!(screen.status, "14 elements · 15 relationships · 5 views");
+        assert_eq!(screen.status, "14 elements · 15 relationships · 6 views");
         assert!(screen.back.is_none() && screen.details.is_none() && screen.editor.is_none());
         assert!(screen.problems.is_empty() && screen.problems_title.is_empty() && screen.empty.is_empty());
         assert_eq!(screen.diagram.as_ref().unwrap().nodes.len(), 5);
@@ -1005,7 +1012,7 @@ mod tests {
         assert_eq!(value["exports"][0]["fileName"], "index.svg");
         assert_eq!(value["exports"][0]["kind"], "Svg");
         assert_eq!(value["details"]["close"]["id"], "details.close");
-        assert_eq!(ui.view_ids(), ["index", "shop", "api", "orders", "checkout"]);
+        assert_eq!(ui.view_ids(), ["index", "shop", "api", "orders", "checkout", "checkoutSequence"]);
     }
 
     #[test]

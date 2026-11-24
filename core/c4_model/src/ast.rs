@@ -94,6 +94,8 @@ pub struct ViewDef {
     pub rules: Vec<ViewRule>,
     /// `dynamic view`: the steps below are what it shows.
     pub dynamic: bool,
+    /// `variant sequence`
+    pub sequence: bool,
     pub steps: Vec<StepItem>,
 }
 

@@ -60,6 +60,8 @@ pub struct ComputedView {
     pub direction: Direction,
     /// A dynamic view: its lines are steps, in the order they happen.
     pub dynamic: bool,
+    /// To be drawn as a sequence rather than a diagram.
+    pub sequence: bool,
     /// Parents before their children.
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
@@ -290,6 +292,7 @@ impl Model {
             description: view.description.clone(),
             direction,
             dynamic: view.dynamic,
+            sequence: view.dynamic && view.sequence,
             nodes,
             edges,
         })
@@ -689,14 +692,13 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "shop.c4:39:17: warning: The 'sequence' variant is not supported yet; this view is drawn as a diagram.",
                 "shop.c4:40:17: error: A step needs two different elements, neither inside the other.",
                 "shop.c4:41:17: error: There is no element 'nobody'.",
             ]
         );
         assert!(ws.model.view_ids().contains(&"checkout"));
         let view = ws.model.compute_view("checkout").unwrap();
-        assert!(view.dynamic);
+        assert!(view.dynamic && view.sequence);
         assert_eq!((view.title.as_str(), view.direction), ("Checking out", crate::Direction::LeftRight));
         let (nodes, edges) = summary(&view);
         // The ends of every step, and the group that was asked for; not

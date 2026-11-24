@@ -161,6 +161,9 @@ pub struct View {
     /// A `dynamic view`: it shows its steps, in order, rather than the
     /// model's relationships.
     pub dynamic: bool,
+    /// Drawn as a sequence: a line down from each participant, the steps
+    /// one under another.
+    pub sequence: bool,
     pub(crate) steps: Vec<Step>,
 }
 
@@ -419,6 +422,7 @@ pub fn load(sources: &[Source]) -> Workspace {
             rules: everything(),
             extends: None,
             dynamic: false,
+            sequence: false,
             steps: Vec::new(),
         });
     }
@@ -442,6 +446,7 @@ pub fn load(sources: &[Source]) -> Workspace {
             rules: everything(),
             extends: None,
             dynamic: false,
+            sequence: false,
             steps: Vec::new(),
         };
         b.model.generated_views.push(view);
@@ -831,6 +836,7 @@ impl Builder<'_> {
             rules,
             extends: def.extends.clone(),
             dynamic: def.dynamic,
+            sequence: def.sequence,
             steps,
         });
     }

@@ -24,6 +24,7 @@ assert.deepEqual(
     ["view.api", "Inside the API", false],
     ["view.orders", "An order, end to end", false],
     ["view.checkout", "Placing an order", false],
+    ["view.checkoutSequence", "Placing an order, as a sequence", false],
   ],
 );
 assert.equal(screen.diagram, undefined, "the diagram does not cross as JSON");

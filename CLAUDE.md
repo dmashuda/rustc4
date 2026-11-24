@@ -57,6 +57,12 @@ thin bindings, renderers that only draw.
   `parallel`), drawn by the same layout. A step takes its words and looks
   from the relationship the model has between its two ends unless it says
   otherwise; one written backwards (`a <- b`) takes nothing.
+- **`variant sequence`** is the same steps laid out by
+  `c4_layout/src/sequence.rs` instead of `graph.rs`: the steps' ends side
+  by side in the order they first appear (no groups, nobody who only
+  stands by), a `Lifeline` down from each, one level line per step.
+  Lifelines are in the `Diagram`, drawn behind everything, and are not
+  tapped or faded.
 - **Ids are API.** `view.<id>`, `node.<fqn>`, `open.<fqn>`,
   `edge.<source>-><target>` (a step of a dynamic view:
   `edge.<source>-><target>#<step>`), `back`, `canvas`, `details.close`, `file.<n>`,

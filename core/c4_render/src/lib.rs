@@ -281,6 +281,19 @@ pub fn svg(diagram: &Diagram, options: &SvgOptions) -> String {
     if let Some(background) = &options.background {
         let _ = write!(out, r#"<rect width="{w}" height="{h}" fill="{}"/>"#, esc(background));
     }
+    // A sequence's lines down, behind everything.
+    for line in &diagram.lifelines {
+        let _ = write!(
+            out,
+            r#"<path class="lifeline" d="M{} {}L{} {}" fill="none" stroke="{}" stroke-width="1.2"{}/>"#,
+            n(line.from.x),
+            n(line.from.y),
+            n(line.to.x),
+            n(line.to.y),
+            esc(&line.color),
+            dash(line.line)
+        );
+    }
     // Groups at the back, then lines, then boxes, then the words on lines.
     for item in diagram.nodes.iter().filter(|x| x.group) {
         node(&mut out, item);

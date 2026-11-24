@@ -36,6 +36,13 @@ struct DiagramDrawing {
     }
 
     func draw(in context: inout GraphicsContext) {
+        // A sequence's lines down, behind everything.
+        for line in diagram.lifelines {
+            var path = Path()
+            path.move(to: CGPoint(x: line.from.x, y: line.from.y))
+            path.addLine(to: CGPoint(x: line.to.x, y: line.to.y))
+            context.stroke(path, with: .color(Color(hex: line.color)), style: stroke(line.line, width: 1.2))
+        }
         for node in diagram.nodes where node.group {
             var faded = self.context(for: "node.\(node.id)", from: context)
             draw(node, in: &faded)

@@ -588,6 +588,7 @@ impl Parser {
             tags: Vec::new(),
             rules: Vec::new(),
             dynamic,
+            sequence: false,
             steps: Vec::new(),
         };
         if dynamic {
@@ -703,17 +704,14 @@ impl Parser {
             return result;
         }
         if self.is_word("variant") {
-            let span = self.span();
             self.next();
+            let at = self.span();
             let variant = self.ident("'diagram' or 'sequence'")?;
-            if variant != "diagram" {
-                self.errors.push(ParseError {
-                    span,
-                    message: format!(
-                        "The '{variant}' variant is not supported yet; this view is drawn as a diagram."
-                    ),
-                });
-            }
+            view.sequence = match variant.as_str() {
+                "sequence" => true,
+                "diagram" => false,
+                _ => return self.fail(at, format!("Unknown variant '{variant}': use diagram or sequence.")),
+            };
             return Ok(());
         }
         self.view_item(view)
