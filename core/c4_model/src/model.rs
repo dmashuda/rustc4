@@ -561,8 +561,14 @@ impl Builder<'_> {
                     Ok(n) if (0.0..=100.0).contains(&n) => style.opacity = n / 100.0,
                     _ => self.error(*span, format!("'{value}' is not an opacity: use 0% to 100%.")),
                 },
-                // Accepted so LikeC4 sources load; they change nothing here yet.
-                "icon" | "iconColor" | "iconSize" | "size" | "padding" | "textSize" | "multiple" => {}
+                // Accepted so LikeC4 sources load; they change nothing here
+                // yet, and say so.
+                "icon" | "iconColor" | "iconSize" | "size" | "padding" | "textSize" | "multiple" => self
+                    .report(
+                        *span,
+                        Severity::Warning,
+                        format!("'{key}' is not supported yet; it changes nothing in the drawing."),
+                    ),
                 _ => self.error(*span, format!("Unknown style property '{key}'.")),
             }
         }

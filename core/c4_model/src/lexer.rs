@@ -127,6 +127,7 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             let start = Span { file, line, col };
             advance!();
             advance!();
+            let from = i;
             let mut closed = false;
             while i < chars.len() {
                 if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
@@ -139,6 +140,14 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             }
             if !closed {
                 errors.push(LexError { span: start, message: "This comment is never closed.".into() });
+            }
+            // How LikeC4's editor saves a view arranged by hand.
+            if chars[from..i].iter().collect::<String>().contains("@likec4-generated") {
+                errors.push(LexError {
+                    span: start,
+                    message: "Manual layout is not supported yet; this view is laid out automatically."
+                        .into(),
+                });
             }
             spaced = true;
             continue;
