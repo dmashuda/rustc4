@@ -1,1 +1,20 @@
-# Only here so the //bazel:*.MODULE.bazel labels in MODULE.bazel resolve.
+# Here so the //bazel:*.MODULE.bazel labels in MODULE.bazel resolve, and for
+# the platforms built for from another.
+
+# Windows, from Linux or macOS:
+#   bazel build --platforms=//bazel:windows_x86_64 //cli
+# Rust's x86_64-pc-windows-gnullvm, linked by the LLVM toolchain
+# (//bazel:cc_linux.MODULE.bazel) against MinGW-w64.
+#
+# The C runtime is msvcrt.dll, which every Windows has, because that is the
+# one Rust's standard library names (-lmsvcrt): with the toolchain's default,
+# the UCRT, the program starts in one runtime and allocates in the other.
+platform(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
+    ],
+)

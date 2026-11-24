@@ -6,6 +6,10 @@ rust.toolchain(
     extra_target_triples = [
         "aarch64-apple-darwin",
         "x86_64-apple-darwin",
+        # The command line for Windows, built on Linux: the GNU ABI,
+        # which the LLVM toolchain links with MinGW-w64's runtime, so no
+        # Microsoft SDK is needed.
+        "x86_64-pc-windows-gnullvm",
         # Web
         "wasm32-unknown-unknown",
     ],
