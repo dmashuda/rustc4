@@ -62,6 +62,17 @@ struct DiagramDrawing {
             let on = selected == "edge.\(edge.id)"
             for label in edge.labels { draw(label, in: &faded, color: on ? accent : nil) }
         }
+        // What the looks mean: samples drawn as any node or edge is, never
+        // selected and never faded.
+        if let legend = diagram.legend {
+            let frame = CGRect(x: legend.x, y: legend.y, width: legend.width, height: legend.height)
+            context.stroke(
+                Path(roundedRect: frame, cornerRadius: 8), with: .color(Color(hex: legend.stroke).opacity(0.55)),
+                style: StrokeStyle(lineWidth: 1.25))
+            for node in legend.nodes { draw(node, in: &context) }
+            for edge in legend.edges { draw(edge, in: &context) }
+            for label in legend.labels { draw(label, in: &context, color: nil) }
+        }
     }
 
     private func stroke(_ line: LineStyle, width: CGFloat) -> StrokeStyle {

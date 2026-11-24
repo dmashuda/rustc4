@@ -137,6 +137,9 @@ pub struct ElementStyle {
     /// How big the icon is; as `size`, unless it says.
     pub icon_size: Option<Size>,
     pub icon_position: IconPosition,
+    /// What a legend says of it, where a style says: `style a { notation
+    /// 'Deprecated' }`. Otherwise its own, or its kind's.
+    pub notation: Option<String>,
 }
 
 impl Default for ElementStyle {
@@ -153,6 +156,7 @@ impl Default for ElementStyle {
             icon: None,
             icon_size: None,
             icon_position: IconPosition::Left,
+            notation: None,
         }
     }
 }
@@ -182,6 +186,9 @@ pub struct Element {
     /// What its box says, if not the description.
     pub summary: String,
     pub technology: String,
+    /// What a legend says a box that looks like this is: its own, or its
+    /// kind's. Empty: it is not in the legend.
+    pub notation: String,
     pub tags: Vec<String>,
     /// (url, title)
     pub links: Vec<(String, String)>,
@@ -222,6 +229,8 @@ pub struct Relation {
     pub title: String,
     pub description: String,
     pub technology: String,
+    /// What a legend says a line that looks like this is. Empty: nothing.
+    pub notation: String,
     pub tags: Vec<String>,
     pub metadata: Vec<(String, String)>,
     pub style: RelationStyle,
@@ -261,6 +270,7 @@ pub(crate) struct Step {
     pub title: String,
     pub technology: String,
     pub notes: String,
+    pub notation: String,
     pub style: RelationStyle,
 }
 
@@ -396,12 +406,14 @@ impl Model {
 struct KindSpec {
     style: ElementStyle,
     technology: Option<String>,
+    notation: Option<String>,
 }
 
 #[derive(PartialEq)]
 struct RelKindSpec {
     style: RelationStyle,
     technology: Option<String>,
+    notation: Option<String>,
 }
 
 struct Builder<'a> {
@@ -488,14 +500,18 @@ pub fn load(sources: &[Source]) -> Workspace {
     for file in &files {
         for spec in &file.specs {
             match spec {
-                SpecItem::Element { name, span, style, technology } => {
+                SpecItem::Element { name, span, style, technology, notation } => {
                     let mut resolved = ElementStyle::default();
                     b.element_style(style, &mut resolved);
                     // The same kind, specified the same way, in more than
                     // one file is fine: repositories gathered into one
                     // model each carry the specification they were
                     // checked against. Two that disagree is a problem.
-                    let spec = KindSpec { style: resolved, technology: technology.clone() };
+                    let spec = KindSpec {
+                        style: resolved,
+                        technology: technology.clone(),
+                        notation: notation.clone(),
+                    };
                     match b.kinds.get(name) {
                         Some(known) if *known == spec => {}
                         Some(_) => b.error(
@@ -507,10 +523,14 @@ pub fn load(sources: &[Source]) -> Workspace {
                         }
                     }
                 }
-                SpecItem::Relationship { name, span, style, technology } => {
+                SpecItem::Relationship { name, span, style, technology, notation } => {
                     let mut resolved = RelationStyle::default();
                     b.relation_style(style, &mut resolved);
-                    let spec = RelKindSpec { style: resolved, technology: technology.clone() };
+                    let spec = RelKindSpec {
+                        style: resolved,
+                        technology: technology.clone(),
+                        notation: notation.clone(),
+                    };
                     match b.rel_kinds.get(name) {
                         Some(known) if *known == spec => {}
                         Some(_) => b.error(
@@ -792,6 +812,7 @@ impl Builder<'_> {
                         style.icon = icon;
                     }
                 }
+                "notation" => style.notation = Some(tidy(value)),
                 "iconSize" => match Size::parse(value) {
                     Some(size) => style.icon_size = Some(size),
                     None => self.error(
@@ -902,8 +923,8 @@ impl Builder<'_> {
             self.error(def.span, format!("There is already an element '{fqn}'."));
             return;
         }
-        let (mut style, kind_technology) = match self.kinds.get(&def.kind) {
-            Some(spec) => (spec.style.clone(), spec.technology.clone()),
+        let (mut style, kind_technology, kind_notation) = match self.kinds.get(&def.kind) {
+            Some(spec) => (spec.style.clone(), spec.technology.clone(), spec.notation.clone()),
             None => {
                 let known: Vec<_> = self.kinds.keys().cloned().collect();
                 let hint = if known.is_empty() {
@@ -912,7 +933,7 @@ impl Builder<'_> {
                     format!("The kinds specified are: {}.", known.join(", "))
                 };
                 self.error(def.span, format!("Unknown element kind '{}'. {hint}", def.kind));
-                (ElementStyle::default(), None)
+                (ElementStyle::default(), None, None)
             }
         };
         self.element_style(&def.style, &mut style);
@@ -930,6 +951,7 @@ impl Builder<'_> {
             description: tidy(def.description.as_deref().unwrap_or_default()),
             summary: tidy(def.summary.as_deref().unwrap_or_default()),
             technology: tidy(def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default()),
+            notation: tidy(def.notation.as_deref().or(kind_notation.as_deref()).unwrap_or_default()),
             tags: def.tags.clone(),
             links: def
                 .links
@@ -1009,10 +1031,12 @@ impl Builder<'_> {
                         self.error(def.span, "A relationship needs two different elements.".into());
                         continue;
                     }
-                    let (mut style, kind_technology) = match &def.kind {
-                        None => (RelationStyle::default(), None),
+                    let (mut style, kind_technology, kind_notation) = match &def.kind {
+                        None => (RelationStyle::default(), None, None),
                         Some(kind) => match self.rel_kinds.get(kind) {
-                            Some(spec) => (spec.style.clone(), spec.technology.clone()),
+                            Some(spec) => {
+                                (spec.style.clone(), spec.technology.clone(), spec.notation.clone())
+                            }
                             None => {
                                 self.error(
                                     def.span,
@@ -1020,7 +1044,7 @@ impl Builder<'_> {
                                         "Unknown relationship kind '{kind}'. Add it: specification {{ relationship {kind} }}."
                                     ),
                                 );
-                                (RelationStyle::default(), None)
+                                (RelationStyle::default(), None, None)
                             }
                         },
                     };
@@ -1033,6 +1057,9 @@ impl Builder<'_> {
                         description: tidy(def.description.as_deref().unwrap_or_default()),
                         technology: tidy(
                             def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default(),
+                        ),
+                        notation: tidy(
+                            def.notation.as_deref().or(kind_notation.as_deref()).unwrap_or_default(),
                         ),
                         tags: def.tags.clone(),
                         metadata: def.metadata.clone(),
@@ -1135,9 +1162,9 @@ impl Builder<'_> {
                 })
             })
             .flatten();
-        let (mut style, mut title, mut technology) = match modelled {
-            Some(r) => (r.style.clone(), r.title.clone(), r.technology.clone()),
-            None => (RelationStyle::default(), String::new(), String::new()),
+        let (mut style, mut title, mut technology, mut notation) = match modelled {
+            Some(r) => (r.style.clone(), r.title.clone(), r.technology.clone(), r.notation.clone()),
+            None => (RelationStyle::default(), String::new(), String::new(), String::new()),
         };
         if let Some(kind) = &def.kind {
             match self.rel_kinds.get(kind) {
@@ -1146,6 +1173,7 @@ impl Builder<'_> {
                     if let Some(t) = &spec.technology {
                         technology = t.clone();
                     }
+                    notation = spec.notation.clone().unwrap_or_default();
                 }
                 None => self.error(
                     def.span,
@@ -1169,6 +1197,7 @@ impl Builder<'_> {
             title,
             technology,
             notes: tidy(def.notes.as_deref().unwrap_or_default()),
+            notation,
             style,
         })
     }
@@ -1189,7 +1218,12 @@ impl Builder<'_> {
                                     .filter(|(k, ..)| {
                                         !matches!(
                                             k.as_str(),
-                                            "title" | "description" | "summary" | "technology" | "navigateTo"
+                                            "title"
+                                                | "description"
+                                                | "summary"
+                                                | "technology"
+                                                | "navigateTo"
+                                                | "notation"
                                         )
                                     })
                                     .cloned()

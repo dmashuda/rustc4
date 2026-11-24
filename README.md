@@ -60,7 +60,7 @@ bazel test //...
 ```
 
 `examples/` holds separate models: `shop.c4`, `bigbank.c4`, and
-`delivery/`, which shows icons, sizes, stacks, `where` and `global`. Give
+`delivery/`, which shows icons, sizes, stacks, `where`, `global` and a legend. Give
 one, as above. (Given all of `examples`, they are read as one model, which
 is what a directory means, and what more than one defines is reported.)
 
@@ -91,6 +91,13 @@ cp bazel-bin/cli/cli ~/.local/bin/rustc4
 That one binary has the web viewer inside it: `rustc4 build` needs nothing
 else to write a site, and any file server can host the result. The examples
 below are written with it.
+
+A diagram has a legend under it: a sample of each shape and line whose
+kind has a `notation` in the specification
+(`element service { notation 'A service we run' }`), with what it says. A
+view showing nothing with a notation has none. `--no-legend` leaves it out
+of what `export` and `build` write; in the viewer the **Legend** button
+hides it, and an export from there has it if it is showing.
 
 `export` also writes `json`: the finished `Diagram`, every position and
 color in it, for drawing with something of your own.
@@ -233,7 +240,7 @@ The LikeC4 dialect, most of it:
 
 | | |
 | --- | --- |
-| `specification` | `element` kinds with `style`, `relationship` kinds, `tag`, `color name #hex` |
+| `specification` | `element` kinds with `style`, `relationship` kinds, `tag`, `color name #hex`; `notation 'what this kind means'` on a kind, for the legend (a view can say otherwise: `style a { notation '…' }`, `include a with { notation '…' }`) |
 | `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `summary` (what the box says, if it should differ from the description), `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'technology'`, `-> b` from inside an element, `a -[kind]-> b`, with `line`, `color`, `head`, `tail`; `extend a.b { }` |
 | `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `where` after any of them (`include * where kind is service and tag is not #old`, and after a relationship `-> a where source.tag is #x`: `kind`, `tag`, `metadata.key`, `is` / `is not`, `and`, `or`, `not`, brackets); `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`, then if you like how far apart rows and boxes are (`autoLayout LeftRight 120 110`); `global style name` and `global predicate name`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps; `variant sequence` draws them as a sequence diagram |
 | Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity`; `size`, `padding` and `textSize` from `xsmall` to `xlarge`; `multiple true` for a stack; `icon` from a URL or an SVG file beside the source (`icon ./icons/db.svg`), with `iconSize` and `iconPosition left / right / top / bottom` |

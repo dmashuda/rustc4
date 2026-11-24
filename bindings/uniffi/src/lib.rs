@@ -13,7 +13,7 @@
 use std::sync::Mutex;
 
 use c4_layout::{
-    Anchor, Diagram, Edge, Icon, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
+    Anchor, Diagram, Edge, Icon, Label, Legend, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
 };
 use c4_model::Source;
 use c4_ui::{Controls, Details, Editor, Export, ExportKind, Item, Link, Problem, Screen, Section};
@@ -65,6 +65,7 @@ pub enum TextRole {
     Description,
     GroupTitle,
     EdgeLabel,
+    Legend,
 }
 
 #[uniffi::remote(Record)]
@@ -142,6 +143,18 @@ pub struct Lifeline {
 }
 
 #[uniffi::remote(Record)]
+pub struct Legend {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub stroke: String,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    pub labels: Vec<Label>,
+}
+
+#[uniffi::remote(Record)]
 pub struct Diagram {
     pub id: String,
     pub title: String,
@@ -152,6 +165,7 @@ pub struct Diagram {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub lifelines: Vec<Lifeline>,
+    pub legend: Option<Legend>,
 }
 
 // ----------------------------------------------------------------- screen --
@@ -240,6 +254,7 @@ pub struct Screen {
     pub views_title: String,
     pub views: Vec<Item>,
     pub back: Option<Item>,
+    pub legend: Option<Item>,
     pub diagram: Option<Diagram>,
     pub empty: String,
     pub selected: String,

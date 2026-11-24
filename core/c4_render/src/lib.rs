@@ -7,7 +7,7 @@
 
 use std::fmt::Write;
 
-use c4_layout::{Anchor, Diagram, Edge, Label, LineStyle, Node, Shape};
+use c4_layout::{Anchor, Diagram, Edge, Label, Legend, LineStyle, Node, Shape};
 
 #[derive(Debug, Clone, Default)]
 pub struct SvgOptions {
@@ -225,7 +225,6 @@ fn node(out: &mut String, node: &Node) {
 }
 
 fn edge(out: &mut String, edge: &Edge) {
-    let color = esc(&edge.color);
     let _ = write!(
         out,
         r#"<g class="edge" data-id="{}" data-source="{}" data-target="{}"><title>{}</title>"#,
@@ -234,6 +233,37 @@ fn edge(out: &mut String, edge: &Edge) {
         esc(&edge.target),
         esc(&edge.title),
     );
+    line(out, edge, true);
+    out.push_str("</g>");
+}
+
+/// What the looks in the diagram mean. Its samples are the same shapes and
+/// lines as the diagram's, without ids: there is nothing to tap.
+fn legend(out: &mut String, legend: &Legend) {
+    let _ = write!(
+        out,
+        r#"<g class="legend"><rect x="{}" y="{}" width="{}" height="{}" rx="8" fill="none" stroke="{}" stroke-opacity="0.55" stroke-width="1.25"/>"#,
+        n(legend.x),
+        n(legend.y),
+        n(legend.width),
+        n(legend.height),
+        esc(&legend.stroke),
+    );
+    for node in &legend.nodes {
+        shape(out, node, node.x, node.y);
+    }
+    for edge in &legend.edges {
+        line(out, edge, false);
+    }
+    for label in &legend.labels {
+        text(out, label);
+    }
+    out.push_str("</g>");
+}
+
+/// An edge's curve and end marks. `hit`: with something wide to point at.
+fn line(out: &mut String, edge: &Edge, hit: bool) {
+    let color = esc(&edge.color);
     if let Some(start) = edge.path.first() {
         let mut d = format!("M{} {}", n(start.x), n(start.y));
         for curve in edge.path[1..].as_chunks::<3>().0 {
@@ -249,10 +279,12 @@ fn edge(out: &mut String, edge: &Edge) {
             );
         }
         // A wide invisible stroke first: something to point at.
-        let _ = write!(
-            out,
-            r#"<path class="hit" d="{d}" fill="none" stroke="{color}" stroke-opacity="0" stroke-width="14"/>"#
-        );
+        if hit {
+            let _ = write!(
+                out,
+                r#"<path class="hit" d="{d}" fill="none" stroke="{color}" stroke-opacity="0" stroke-width="14"/>"#
+            );
+        }
         let _ = write!(
             out,
             r#"<path d="{d}" fill="none" stroke="{color}" stroke-width="1.6"{}/>"#,
@@ -280,7 +312,6 @@ fn edge(out: &mut String, edge: &Edge) {
             );
         }
     }
-    out.push_str("</g>");
 }
 
 pub fn svg(diagram: &Diagram, options: &SvgOptions) -> String {
@@ -327,6 +358,9 @@ pub fn svg(diagram: &Diagram, options: &SvgOptions) -> String {
             }
             out.push_str("</g>");
         }
+    }
+    if let Some(item) = &diagram.legend {
+        legend(&mut out, item);
     }
     out.push_str("</svg>");
     out
@@ -436,6 +470,37 @@ mod tests {
         let image = r#"<image href="https://example.com/a.svg?x=1&amp;y=2" x="59.41" y="44" width="36" height="36" preserveAspectRatio="xMidYMid meet"/>"#;
         let (shape, at, words) = (out.find("<rect").unwrap(), out.find(image), out.find("<text").unwrap());
         assert!(at.is_some_and(|at| shape < at && at < words), "{out}");
+    }
+
+    #[test]
+    fn a_legend_is_drawn_last_and_is_nothing_to_tap() {
+        let ws = load(&[Source {
+            name: "t.c4".into(),
+            text: "specification {
+                element store { notation 'Data & more' style { shape storage } }
+                relationship async { notation 'Does not wait' line dotted }
+            }
+            model { a = store; b = store; a -[async]-> b }"
+                .into(),
+        }]);
+        let view = ws.model.compute_view("index").unwrap();
+        let draw = |legend| {
+            svg(
+                &c4_layout::layout_with(&view, &ws.model.colors, c4_layout::Options { legend }),
+                &SvgOptions::default(),
+            )
+        };
+        assert!(!draw(false).contains("legend"));
+        let out = draw(true);
+        let at = out.find(r#"<g class="legend">"#).unwrap();
+        let legend = &out[at..];
+        assert!(legend.ends_with("</g></svg>"));
+        assert!(!legend.contains("data-id") && !legend.contains(r#"class="hit""#));
+        // A frame, a cylinder (two paths), a dotted line with its head, and the words.
+        assert!(legend.starts_with(r#"<g class="legend"><rect "#));
+        assert_eq!(legend.matches("<path").count(), 3);
+        assert!(legend.contains(r#"stroke-dasharray="1.5 4""#) && legend.contains("<polygon"));
+        assert!(legend.contains(r#"<text class="Legend""#) && legend.contains(">Data &amp; more</text>"));
     }
 
     #[test]

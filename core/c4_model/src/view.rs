@@ -23,6 +23,8 @@ pub struct ViewNode {
     pub title: String,
     pub description: String,
     pub technology: String,
+    /// What a legend says a box that looks like this is; empty for none.
+    pub notation: String,
     pub tags: Vec<String>,
     pub shape: Shape,
     pub color: String,
@@ -61,6 +63,8 @@ pub struct ViewEdge {
     pub step: String,
     /// What a step's `notes` say.
     pub notes: String,
+    /// What a legend says a line that looks like this is; empty for none.
+    pub notation: String,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +217,7 @@ impl Model {
                 title: el.title.clone(),
                 description: el.summary_or_description().to_string(),
                 technology: el.technology.clone(),
+                notation: el.notation.clone(),
                 tags: el.tags.clone(),
                 shape: style.shape,
                 color: String::new(),
@@ -241,6 +246,11 @@ impl Model {
                     apply_style(self, props, &mut style);
                 }
             }
+            // What a style says it is, over what its kind does; what
+            // `with` says, below, over both.
+            if let Some(notation) = &style.notation {
+                node.notation = notation.clone();
+            }
             if let Some(props) = c.overrides.get(&i) {
                 apply_style(self, props, &mut style);
                 for (key, value, _) in &props.0 {
@@ -248,6 +258,7 @@ impl Model {
                         "title" => node.title = value.clone(),
                         "description" | "summary" => node.description = value.clone(),
                         "technology" => node.technology = value.clone(),
+                        "notation" => node.notation = value.clone(),
                         "navigateTo" if self.view_def(value).is_some() => {
                             node.navigate_to = Some(value.clone())
                         }
@@ -304,6 +315,7 @@ impl Model {
                 tail,
                 step: step.number.clone(),
                 notes: step.notes.clone(),
+                notation: step.notation.clone(),
             });
         }
         let lifted = if view.dynamic { &[][..] } else { &self.relations[..] };
@@ -335,6 +347,7 @@ impl Model {
                     tail: Arrow::None,
                     step: String::new(),
                     notes: String::new(),
+                    notation: String::new(),
                 });
                 edges.len() - 1
             });
@@ -351,6 +364,7 @@ impl Model {
                 .unwrap_or(&rels[0]);
             let RelationStyle { color, line, head, tail } = lead.style.clone();
             (edge.color, edge.line, edge.head, edge.tail) = (color, line, head, tail);
+            edge.notation = lead.notation.clone();
             let mut titles: Vec<&str> =
                 rels.iter().map(|r| r.title.as_str()).filter(|t| !t.is_empty()).collect();
             titles.dedup();
@@ -435,6 +449,7 @@ fn apply_style(model: &Model, props: &StyleProps, style: &mut ElementStyle) {
                     style.icon = Some(href.clone());
                 }
             }
+            "notation" => style.notation = Some(value.trim().to_string()),
             "iconSize" => style.icon_size = Size::parse(value).or(style.icon_size),
             "iconPosition" => style.icon_position = IconPosition::parse(value).unwrap_or(style.icon_position),
             _ => {}
@@ -1143,6 +1158,55 @@ views {
                 (shared, Size::Large, IconPosition::Top),
             ]
         );
+    }
+
+    #[test]
+    fn notation_is_the_kinds_unless_something_says_otherwise() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification {
+  element box { notation 'A box' }
+  element plain
+  relationship async { notation 'Does not wait' }
+}
+model {
+  a = box
+  b = box { notation 'A special box' }
+  c = plain
+  a -[async]-> b
+  a -> c { notation 'By hand' }
+  b -> c
+}
+views {
+  view v { include *, c with { notation 'In this view' } }
+  dynamic view d { a -> b; a -[async]-> c; b -> c }
+  view styled {
+    include *, b with { notation 'Said last' }
+    style a, b { notation 'Deprecated' }
+    style c { color red }
+  }
+  view shared { include *; global style old }
+}
+global { style old element.kind = box { notation 'Old' } }"
+                .into(),
+        }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        let view = ws.model.compute_view("v").unwrap();
+        let nodes: Vec<_> = view.nodes.iter().map(|n| n.notation.as_str()).collect();
+        assert_eq!(nodes, ["A box", "A special box", "In this view"]);
+        let edges: Vec<_> = view.edges.iter().map(|e| e.notation.as_str()).collect();
+        assert_eq!(edges, ["Does not wait", "By hand", ""]);
+        // A step: its relationship's, or its own kind's.
+        let steps = ws.model.compute_view("d").unwrap();
+        let edges: Vec<_> = steps.edges.iter().map(|e| e.notation.as_str()).collect();
+        assert_eq!(edges, ["Does not wait", "Does not wait", ""]);
+        // A view's style says it over the kind; `with` over the style.
+        let said = |id: &str| {
+            let view = ws.model.compute_view(id).unwrap();
+            view.nodes.iter().map(|n| n.notation.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(said("styled"), ["Deprecated", "Said last", ""]);
+        assert_eq!(said("shared"), ["Old", "Old", ""]);
     }
 
     /// The model the `where` and `global` tests ask about.

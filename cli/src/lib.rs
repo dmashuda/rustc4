@@ -42,6 +42,9 @@ Options:
   --view <id>           Only this view (may be repeated)
   --background <color>  Paint behind the diagram, e.g. '#ffffff' (default: transparent)
   --scale <n>           PNG pixels per diagram pixel (default: 2)
+  --no-legend           Leave out the legend: under each diagram, what its
+                        shapes and lines mean, for those whose kind has a
+                        'notation' in the specification
 ";
 
 /// Runs the command line; returns the exit code.
@@ -61,6 +64,7 @@ struct Options {
     views: BTreeSet<String>,
     background: Option<String>,
     scale: f32,
+    legend: bool,
 }
 
 fn options(args: &[String]) -> Result<Options, String> {
@@ -70,6 +74,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         views: BTreeSet::new(),
         background: None,
         scale: 2.0,
+        legend: true,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -80,6 +85,7 @@ fn options(args: &[String]) -> Result<Options, String> {
                 o.views.insert(value("--view")?);
             }
             "--background" => o.background = Some(value("--background")?),
+            "--no-legend" => o.legend = false,
             "--scale" => {
                 let text = value("--scale")?;
                 o.scale = text
@@ -237,7 +243,8 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
             };
             for id in ids {
                 let view = ws.model.compute_view(id).expect("listed views exist");
-                let diagram = c4_layout::layout(&view, &ws.model.colors);
+                let diagram =
+                    c4_layout::layout_with(&view, &ws.model.colors, c4_layout::Options { legend: o.legend });
                 let svg = c4_render::svg(&diagram, &SvgOptions { background: o.background.clone() });
                 // Nothing here fetches: an icon kept elsewhere is left out.
                 let fetched = diagram
@@ -272,7 +279,7 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
             let sources = read_sources(&o.paths)?;
             let ws = c4_model::load(&sources);
             let failed = report(&ws, err);
-            let written = site::write(&o.out, &sources, &ws)?;
+            let written = site::write(&o.out, &sources, &ws, o.legend)?;
             let _ = writeln!(
                 out,
                 "{}: {} files, {}",
@@ -377,6 +384,30 @@ mod tests {
         assert_eq!((code, out.as_str()), (1, ""));
         assert!(err.contains("m.c4:4:8: error: There is no element 'b'."), "{err}");
         assert!(err.ends_with("1 error\n"));
+    }
+
+    #[test]
+    fn a_legend_is_there_unless_turned_off() {
+        let dir = scratch("legend");
+        let source = dir.join("m.c4");
+        std::fs::write(&source, "specification { element box { notation 'A box' } } model { a = box }")
+            .unwrap();
+        let (source, out_dir) = (source.to_str().unwrap(), dir.to_str().unwrap());
+        let drawn = |args: &[&str], file: &str| {
+            let (code, _, err) = rustc4(args);
+            assert_eq!((code, err.as_str()), (0, ""));
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let svg = drawn(&["export", "svg", source, "-o", out_dir], "index.svg");
+        assert!(svg.contains(r#"<g class="legend">"#) && svg.contains(">A box</text>"));
+        let json = drawn(&["export", "json", source, "-o", out_dir], "index.json");
+        assert!(json.contains(r#""legend": {"#), "{json}");
+        let site = drawn(&["build", source, "-o", out_dir], "views/index.svg");
+        assert!(site.contains(r#"<g class="legend">"#));
+        let svg = drawn(&["export", "svg", source, "-o", out_dir, "--no-legend"], "index.svg");
+        assert!(!svg.contains("legend"));
+        let site = drawn(&["build", source, "-o", out_dir, "--no-legend"], "views/index.svg");
+        assert!(!site.contains("legend"));
     }
 
     #[test]
