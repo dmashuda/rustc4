@@ -33,34 +33,40 @@ pub struct StyleProps(pub Vec<(String, String, Span)>);
 
 #[derive(Debug)]
 pub enum SpecItem {
-    Element {
-        name: String,
-        span: Span,
-        style: StyleProps,
-        technology: Option<String>,
-        /// What this kind means, for a legend.
-        notation: Option<String>,
-    },
-    Relationship {
-        name: String,
-        span: Span,
-        style: StyleProps,
-        technology: Option<String>,
-        notation: Option<String>,
-    },
+    Element(KindDef),
+    Relationship(KindDef),
     Tag,
-    Color {
-        name: String,
-        value: String,
-        span: Span,
-    },
+    Color { name: String, value: String, span: Span },
+}
+
+/// `element name { ... }` or `relationship name { ... }` in a
+/// specification: what everything of that kind starts with.
+#[derive(Debug, Default)]
+pub struct KindDef {
+    pub name: String,
+    pub span: Span,
+    pub style: StyleProps,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub technology: Option<String>,
+    /// What this kind means, for a legend.
+    pub notation: Option<String>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug)]
 pub enum ModelItem {
     Element(ElementDef),
     Relation(RelationDef),
-    Extend { target: Ref, items: Vec<ModelItem> },
+    /// `extend a.b { ... }`: more of an element written elsewhere. Of
+    /// `more`, its tags, metadata, links and what is inside it count.
+    Extend {
+        target: Ref,
+        more: Box<ElementDef>,
+    },
+    /// `extend a -> b 'title' { ... }`: more tags and metadata for a
+    /// relationship written elsewhere. `more` says which, and what.
+    ExtendRelation(RelationDef),
 }
 
 /// A dotted name as written: `cloud.backend.api`.
@@ -108,6 +114,8 @@ pub struct RelationDef {
     pub style: StyleProps,
     pub metadata: Vec<(String, String)>,
     pub notation: Option<String>,
+    /// Written `a <-> b`: it goes both ways.
+    pub both: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

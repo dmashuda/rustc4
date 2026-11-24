@@ -34,6 +34,8 @@ pub enum Tok {
     RBrace,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Eq,
     Ne,
     Colon,
@@ -61,6 +63,8 @@ impl Tok {
             Tok::RBrace => "'}'".into(),
             Tok::LParen => "'('".into(),
             Tok::RParen => "')'".into(),
+            Tok::LBracket => "'['".into(),
+            Tok::RBracket => "']'".into(),
             Tok::Eq => "'='".into(),
             Tok::Ne => "'!='".into(),
             Tok::Colon => "':'".into(),
@@ -165,11 +169,30 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
 
         // Strings, in either quote, over as many lines as they like.
         if c == '\'' || c == '"' {
+            // Three of them open a string that ends at the next three, so
+            // that it can hold quotes of its own: Markdown, usually.
+            let triple = chars.get(i + 1) == Some(&c) && chars.get(i + 2) == Some(&c);
             advance!();
+            if triple {
+                advance!();
+                advance!();
+            }
             let mut s = String::new();
             let mut closed = false;
             while i < chars.len() {
                 let d = chars[i];
+                if triple {
+                    if d == c && chars.get(i + 1) == Some(&c) && chars.get(i + 2) == Some(&c) {
+                        advance!();
+                        advance!();
+                        advance!();
+                        closed = true;
+                        break;
+                    }
+                    s.push(d);
+                    advance!();
+                    continue;
+                }
                 if d == '\\' && i + 1 < chars.len() {
                     advance!();
                     s.push(match chars[i] {
@@ -274,6 +297,8 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             ('}', _) => (Tok::RBrace, 1),
             ('(', _) => (Tok::LParen, 1),
             (')', _) => (Tok::RParen, 1),
+            ('[', _) => (Tok::LBracket, 1),
+            (']', _) => (Tok::RBracket, 1),
             ('=', _) => (Tok::Eq, 1),
             (':', _) => (Tok::Colon, 1),
             (';', _) => (Tok::Semi, 1),

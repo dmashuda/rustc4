@@ -407,13 +407,17 @@ struct KindSpec {
     style: ElementStyle,
     technology: Option<String>,
     notation: Option<String>,
+    tags: Vec<String>,
 }
 
 #[derive(PartialEq)]
 struct RelKindSpec {
     style: RelationStyle,
+    title: Option<String>,
+    description: Option<String>,
     technology: Option<String>,
     notation: Option<String>,
+    tags: Vec<String>,
 }
 
 struct Builder<'a> {
@@ -489,10 +493,23 @@ pub fn load(sources: &[Source]) -> Workspace {
     for file in &files {
         for spec in &file.specs {
             if let SpecItem::Color { name, value, span } = spec {
-                if parse_hex(value).is_some() {
-                    b.model.colors.insert(name.clone(), value.clone());
-                } else {
-                    b.error(*span, format!("'{value}' is not a color: write it as #rrggbb."));
+                match parse_color(value) {
+                    Some((hex, solid)) => {
+                        if !solid {
+                            b.report(
+                                *span,
+                                Severity::Warning,
+                                format!(
+                                    "A see-through color ('{value}') is not supported yet; it is drawn solid."
+                                ),
+                            );
+                        }
+                        b.model.colors.insert(name.clone(), hex);
+                    }
+                    None => b.error(
+                        *span,
+                        format!("'{value}' is not a color: write it as #rrggbb, or rgb(r, g, b)."),
+                    ),
                 }
             }
         }
@@ -500,45 +517,52 @@ pub fn load(sources: &[Source]) -> Workspace {
     for file in &files {
         for spec in &file.specs {
             match spec {
-                SpecItem::Element { name, span, style, technology, notation } => {
+                SpecItem::Element(def) => {
                     let mut resolved = ElementStyle::default();
-                    b.element_style(style, &mut resolved);
+                    b.element_style(&def.style, &mut resolved);
                     // The same kind, specified the same way, in more than
                     // one file is fine: repositories gathered into one
                     // model each carry the specification they were
                     // checked against. Two that disagree is a problem.
                     let spec = KindSpec {
                         style: resolved,
-                        technology: technology.clone(),
-                        notation: notation.clone(),
+                        technology: def.technology.clone(),
+                        notation: def.notation.clone(),
+                        tags: def.tags.clone(),
                     };
-                    match b.kinds.get(name) {
+                    match b.kinds.get(&def.name) {
                         Some(known) if *known == spec => {}
                         Some(_) => b.error(
-                            *span,
-                            format!("The element kind '{name}' is specified twice, and differently."),
+                            def.span,
+                            format!("The element kind '{}' is specified twice, and differently.", def.name),
                         ),
                         None => {
-                            b.kinds.insert(name.clone(), spec);
+                            b.kinds.insert(def.name.clone(), spec);
                         }
                     }
                 }
-                SpecItem::Relationship { name, span, style, technology, notation } => {
+                SpecItem::Relationship(def) => {
                     let mut resolved = RelationStyle::default();
-                    b.relation_style(style, &mut resolved);
+                    b.relation_style(&def.style, &mut resolved);
                     let spec = RelKindSpec {
                         style: resolved,
-                        technology: technology.clone(),
-                        notation: notation.clone(),
+                        title: def.title.clone(),
+                        description: def.description.clone(),
+                        technology: def.technology.clone(),
+                        notation: def.notation.clone(),
+                        tags: def.tags.clone(),
                     };
-                    match b.rel_kinds.get(name) {
+                    match b.rel_kinds.get(&def.name) {
                         Some(known) if *known == spec => {}
                         Some(_) => b.error(
-                            *span,
-                            format!("The relationship kind '{name}' is specified twice, and differently."),
+                            def.span,
+                            format!(
+                                "The relationship kind '{}' is specified twice, and differently.",
+                                def.name
+                            ),
                         ),
                         None => {
-                            b.rel_kinds.insert(name.clone(), spec);
+                            b.rel_kinds.insert(def.name.clone(), spec);
                         }
                     }
                 }
@@ -554,6 +578,9 @@ pub fn load(sources: &[Source]) -> Workspace {
     }
     for file in &files {
         b.relations(&file.model, None);
+    }
+    for file in &files {
+        b.extend_relations(&file.model, None);
     }
     for file in &files {
         for name in &file.imports {
@@ -647,6 +674,34 @@ fn tidy(text: &str) -> String {
     let first = lines.iter().position(|l| !l.is_empty()).unwrap_or(lines.len());
     let last = lines.iter().rposition(|l| !l.is_empty()).map_or(first, |i| i + 1);
     lines[first..last].join("\n")
+}
+
+/// A color as `#rrggbb`, and whether it is solid: from `#rgb`, `#rrggbb`,
+/// `#rrggbbaa`, `rgb(r,g,b)` or `rgba(r,g,b,a)` (as the parser leaves them).
+fn parse_color(value: &str) -> Option<(String, bool)> {
+    if let Some(hex) = value.strip_prefix('#') {
+        if hex.len() == 8 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some((format!("#{}", &hex[..6]), hex[6..].eq_ignore_ascii_case("ff")));
+        }
+        return parse_hex(value).map(|(r, g, b)| (format!("#{r:02x}{g:02x}{b:02x}"), true));
+    }
+    let inside = value.strip_prefix("rgba(").or(value.strip_prefix("rgb("))?.strip_suffix(')')?;
+    let parts: Vec<&str> = inside.split(',').collect();
+    if !(3..=4).contains(&parts.len()) {
+        return None;
+    }
+    let mut rgb = [0u8; 3];
+    for (channel, part) in rgb.iter_mut().zip(&parts) {
+        *channel = part.parse::<f64>().ok().filter(|n| (0.0..=255.0).contains(n))?.round() as u8;
+    }
+    let solid = match parts.get(3) {
+        None => true,
+        Some(a) => match a.strip_suffix('%') {
+            Some(percent) => percent.parse::<f64>().ok()? >= 100.0,
+            None => a.parse::<f64>().ok()? >= 1.0,
+        },
+    };
+    Some((format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]), solid))
 }
 
 pub(crate) fn parse_hex(value: &str) -> Option<(u8, u8, u8)> {
@@ -748,8 +803,15 @@ impl Builder<'_> {
             "solid" => Some(Line::Solid),
             "dashed" => Some(Line::Dashed),
             "dotted" => Some(Line::Dotted),
-            // A border, not a line: drawn solid.
-            "none" => Some(Line::Solid),
+            // A border, not a line.
+            "none" => {
+                self.report(
+                    span,
+                    Severity::Warning,
+                    "'border none' is not supported yet; the border is drawn solid.".into(),
+                );
+                Some(Line::Solid)
+            }
             _ => {
                 self.error(span, format!("Unknown line '{value}': use solid, dashed or dotted."));
                 None
@@ -761,7 +823,15 @@ impl Builder<'_> {
         for (key, value, span) in &props.0 {
             match key.as_str() {
                 "shape" => match value.as_str() {
-                    "rectangle" | "component" | "document" | "bucket" => style.shape = Shape::Rectangle,
+                    "rectangle" => style.shape = Shape::Rectangle,
+                    "component" | "document" | "bucket" | "agent" => {
+                        self.report(
+                            *span,
+                            Severity::Warning,
+                            format!("The shape '{value}' is not supported yet; it is drawn as a rectangle."),
+                        );
+                        style.shape = Shape::Rectangle;
+                    }
                     "person" => style.shape = Shape::Person,
                     "browser" => style.shape = Shape::Browser,
                     "mobile" => style.shape = Shape::Mobile,
@@ -866,7 +936,15 @@ impl Builder<'_> {
                         "none" => Arrow::None,
                         "normal" => Arrow::Normal,
                         "onormal" => Arrow::ONormal,
-                        "open" | "vee" | "crow" => Arrow::Open,
+                        "open" => Arrow::Open,
+                        "vee" | "crow" => {
+                            self.report(
+                                *span,
+                                Severity::Warning,
+                                format!("The arrow '{value}' is not supported yet; it is drawn as 'open'."),
+                            );
+                            Arrow::Open
+                        }
                         "diamond" => Arrow::Diamond,
                         "odiamond" => Arrow::ODiamond,
                         "dot" => Arrow::Dot,
@@ -887,7 +965,17 @@ impl Builder<'_> {
                         style.tail = arrow;
                     }
                 }
-                "navigateTo" | "notation" => {}
+                "notation" => {}
+                "navigateTo" => self.report(
+                    *span,
+                    Severity::Warning,
+                    "'navigateTo' on a relationship is not supported yet; it goes nowhere.".into(),
+                ),
+                "multiple" => self.report(
+                    *span,
+                    Severity::Warning,
+                    "'multiple' on a relationship is not supported yet; relationships between the same two boxes are drawn as one line.".into(),
+                ),
                 _ => self.error(*span, format!("Unknown relationship property '{key}'.")),
             }
         }
@@ -897,15 +985,31 @@ impl Builder<'_> {
         for item in items {
             match item {
                 ModelItem::Element(def) => self.element(def, parent),
-                ModelItem::Extend { .. } | ModelItem::Relation(_) => {}
+                ModelItem::Extend { .. } | ModelItem::Relation(_) | ModelItem::ExtendRelation(_) => {}
             }
         }
         // `extend` after the elements beside it, so it can come first in
         // the file.
         for item in items {
-            if let ModelItem::Extend { target, items } = item {
+            if let ModelItem::Extend { target, more } = item {
                 match self.model.resolve(&target.parts, parent) {
-                    Some(i) => self.elements(items, Some(i)),
+                    Some(i) => {
+                        // More of the same element: its tags once each,
+                        // its metadata and links added to.
+                        let el = &mut self.model.elements[i];
+                        for tag in &more.tags {
+                            if !el.tags.contains(tag) {
+                                el.tags.push(tag.clone());
+                            }
+                        }
+                        el.metadata.extend(more.metadata.iter().cloned());
+                        el.links.extend(
+                            more.links
+                                .iter()
+                                .map(|(url, title)| (url.clone(), title.clone().unwrap_or_default())),
+                        );
+                        self.elements(&more.items, Some(i));
+                    }
                     None => {
                         self.error(target.span, format!("There is no element '{}' to extend.", target.text()))
                     }
@@ -923,6 +1027,8 @@ impl Builder<'_> {
             self.error(def.span, format!("There is already an element '{fqn}'."));
             return;
         }
+        let mut tags = self.kinds.get(&def.kind).map(|spec| spec.tags.clone()).unwrap_or_default();
+        tags.extend(def.tags.iter().filter(|t| !tags.contains(t)).cloned().collect::<Vec<_>>());
         let (mut style, kind_technology, kind_notation) = match self.kinds.get(&def.kind) {
             Some(spec) => (spec.style.clone(), spec.technology.clone(), spec.notation.clone()),
             None => {
@@ -952,7 +1058,7 @@ impl Builder<'_> {
             summary: tidy(def.summary.as_deref().unwrap_or_default()),
             technology: tidy(def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default()),
             notation: tidy(def.notation.as_deref().or(kind_notation.as_deref()).unwrap_or_default()),
-            tags: def.tags.clone(),
+            tags,
             links: def
                 .links
                 .iter()
@@ -1007,11 +1113,13 @@ impl Builder<'_> {
                         self.relations(&def.items, Some(i));
                     }
                 }
-                ModelItem::Extend { target, items } => {
+                ModelItem::Extend { target, more } => {
                     if let Some(i) = self.model.resolve(&target.parts, scope) {
-                        self.relations(items, Some(i));
+                        self.relations(&more.items, Some(i));
                     }
                 }
+                // After every relationship is in: see `extend_relations`.
+                ModelItem::ExtendRelation(_) => {}
                 ModelItem::Relation(def) => {
                     let source = match &def.source {
                         Some(reference) => self.find(reference, scope),
@@ -1031,6 +1139,14 @@ impl Builder<'_> {
                         self.error(def.span, "A relationship needs two different elements.".into());
                         continue;
                     }
+                    // What its kind says of every relationship of that
+                    // kind: said again here, it is this one's instead;
+                    // tags are both.
+                    let of_kind = def.kind.as_ref().and_then(|kind| self.rel_kinds.get(kind));
+                    let kind_title = of_kind.and_then(|spec| spec.title.clone());
+                    let kind_description = of_kind.and_then(|spec| spec.description.clone());
+                    let mut tags = of_kind.map(|spec| spec.tags.clone()).unwrap_or_default();
+                    tags.extend(def.tags.iter().filter(|t| !tags.contains(t)).cloned().collect::<Vec<_>>());
                     let (mut style, kind_technology, kind_notation) = match &def.kind {
                         None => (RelationStyle::default(), None, None),
                         Some(kind) => match self.rel_kinds.get(kind) {
@@ -1049,23 +1165,83 @@ impl Builder<'_> {
                         },
                     };
                     self.relation_style(&def.style, &mut style);
+                    // Both ways: the same mark at each end, unless it says.
+                    if def.both && style.tail == Arrow::None {
+                        style.tail = style.head;
+                    }
                     self.model.relations.push(Relation {
                         source,
                         target,
                         kind: def.kind.clone(),
-                        title: tidy(def.title.as_deref().unwrap_or_default()),
-                        description: tidy(def.description.as_deref().unwrap_or_default()),
+                        title: tidy(def.title.as_deref().or(kind_title.as_deref()).unwrap_or_default()),
+                        description: tidy(
+                            def.description.as_deref().or(kind_description.as_deref()).unwrap_or_default(),
+                        ),
                         technology: tidy(
                             def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default(),
                         ),
                         notation: tidy(
                             def.notation.as_deref().or(kind_notation.as_deref()).unwrap_or_default(),
                         ),
-                        tags: def.tags.clone(),
+                        tags,
                         metadata: def.metadata.clone(),
                         style,
                         origin: self.origin(def.span),
                     });
+                }
+            }
+        }
+    }
+
+    /// `extend a -> b 'title' { ... }`: more tags and metadata for the
+    /// relationship between those two, of that kind, and with that title
+    /// if one is given.
+    fn extend_relations(&mut self, items: &[ModelItem], scope: Option<usize>) {
+        for item in items {
+            match item {
+                ModelItem::Element(def) => {
+                    let fqn = match scope {
+                        Some(p) => format!("{}.{}", self.model.elements[p].fqn, def.name),
+                        None => def.name.clone(),
+                    };
+                    if let Some(&i) = self.model.by_fqn.get(&fqn) {
+                        self.extend_relations(&def.items, Some(i));
+                    }
+                }
+                ModelItem::Extend { target, more } => {
+                    if let Some(i) = self.model.resolve(&target.parts, scope) {
+                        self.extend_relations(&more.items, Some(i));
+                    }
+                }
+                ModelItem::Relation(_) => {}
+                ModelItem::ExtendRelation(def) => {
+                    let source = def.source.as_ref().and_then(|r| self.find(r, scope));
+                    let target = self.find(&def.target, scope);
+                    let (Some(source), Some(target)) = (source, target) else { continue };
+                    let title = def.title.as_deref().map(tidy);
+                    let mut found = false;
+                    for rel in &mut self.model.relations {
+                        if rel.source != source
+                            || rel.target != target
+                            || rel.kind != def.kind
+                            || title.as_ref().is_some_and(|t| *t != rel.title)
+                        {
+                            continue;
+                        }
+                        found = true;
+                        for tag in &def.tags {
+                            if !rel.tags.contains(tag) {
+                                rel.tags.push(tag.clone());
+                            }
+                        }
+                        rel.metadata.extend(def.metadata.iter().cloned());
+                    }
+                    if !found {
+                        self.error(
+                            def.span,
+                            "There is no such relationship to extend: name the same two elements, the same kind and the same title as where it is written.".into(),
+                        );
+                    }
                 }
             }
         }

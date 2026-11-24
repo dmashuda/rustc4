@@ -53,8 +53,8 @@ model {
       #next
     }
 
-    web -> api 'calls' 'HTTPS, JSON'
-    mobile -> api 'calls' 'HTTPS, JSON'
+    web -> api 'calls' { technology 'HTTPS, JSON' }
+    mobile -> api 'calls' { technology 'HTTPS, JSON' }
     api.catalogue -> db 'reads'
     api.orders -> db 'reads and writes'
     api.accounts -> db 'reads and writes'
@@ -67,7 +67,7 @@ model {
 
   customer -> shop.web 'shops with'
   customer -> shop.mobile 'shops with'
-  shop.api.orders -> payments 'charges cards through' 'HTTPS'
+  shop.api.orders -> payments 'charges cards through' { technology 'HTTPS' }
   shop.fulfilment -> mail 'sends updates through'
   shop.fulfilment -> staff 'sends pick lists to'
   mail -> customer 'emails'

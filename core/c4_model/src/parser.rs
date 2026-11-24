@@ -221,7 +221,8 @@ impl Parser {
                         }
                         r
                     }
-                    "deployment" | "likec4lib" => {
+                    // `diff`: a change to the model that is only planned.
+                    "deployment" | "likec4lib" | "diff" => {
                         self.next();
                         self.errors.push(ParseError {
                             span,
@@ -253,14 +254,27 @@ impl Parser {
         let word = self.ident("'element', 'relationship', 'tag' or 'color'")?;
         match word.as_str() {
             "element" | "relationship" => {
-                let name = self.ident("a name for this kind")?;
-                let mut style = StyleProps::default();
-                let (mut technology, mut notation) = (None, None);
+                let mut kind =
+                    KindDef { name: self.ident("a name for this kind")?, span, ..Default::default() };
                 if *self.peek() == Tok::LBrace {
                     self.block(|p| {
+                        if matches!(p.peek(), Tok::Hash(_)) {
+                            p.tags(&mut kind.tags);
+                            return Ok(());
+                        }
                         if p.is_word("style") && *p.peek_at(1) == Tok::LBrace {
                             p.next();
-                            return p.style_block(&mut style);
+                            return p.style_block(&mut kind.style);
+                        }
+                        if p.is_word("link") && matches!(p.peek_at(1), Tok::Raw(_) | Tok::Str(_)) {
+                            p.errors.push(ParseError {
+                                span: p.span(),
+                                message: "A link on a kind is not supported yet; give it to the elements themselves.".into(),
+                            });
+                            p.next();
+                            p.next();
+                            p.opt_string();
+                            return Ok(());
                         }
                         if let Tok::Ident(key) = p.peek().clone()
                             && STRING_PROPS.contains(&key.as_str())
@@ -269,27 +283,47 @@ impl Parser {
                             p.eat(&Tok::Colon);
                             let value = p.string("a string")?;
                             match key.as_str() {
-                                "technology" => technology = Some(value),
-                                "notation" => notation = Some(value),
+                                "title" => kind.title = Some(value),
+                                "description" => kind.description = Some(value),
+                                "technology" => kind.technology = Some(value),
+                                "notation" => kind.notation = Some(value),
                                 _ => {}
                             }
                             return Ok(());
                         }
                         // A relationship kind takes its style without the
                         // `style { }` around it.
-                        p.style_prop(&mut style)
+                        p.style_prop(&mut kind.style)
                     })?;
                 }
                 self.out.specs.push(if word == "element" {
-                    SpecItem::Element { name, span, style, technology, notation }
+                    SpecItem::Element(kind)
                 } else {
-                    SpecItem::Relationship { name, span, style, technology, notation }
+                    SpecItem::Relationship(kind)
                 });
+                Ok(())
+            }
+            // A kind of deployment node: part of the deployment model.
+            "deploymentNode" => {
+                self.errors.push(ParseError {
+                    span,
+                    message: "'deploymentNode' kinds are not supported yet; this one is ignored.".into(),
+                });
+                self.ident("a name for this kind")?;
+                if *self.peek() == Tok::LBrace {
+                    self.skip_block()?;
+                }
                 Ok(())
             }
             "tag" => {
                 self.ident("a tag name")?;
                 if *self.peek() == Tok::LBrace {
+                    self.errors.push(ParseError {
+                        span: self.span(),
+                        message:
+                            "What a tag is given in '{ }' (its color) is not supported yet; it is ignored."
+                                .into(),
+                    });
                     self.skip_block()?;
                 }
                 self.out.specs.push(SpecItem::Tag);
@@ -297,7 +331,23 @@ impl Parser {
             }
             "color" => {
                 let name = self.ident("a color name")?;
-                let value = self.value()?;
+                let mut value = self.value()?;
+                // `rgb(255, 0, 0)`, `rgba(44 8 128 / 50%)`: kept as written,
+                // without the spaces.
+                if matches!(value.as_str(), "rgb" | "rgba") && self.eat(&Tok::LParen) {
+                    let mut parts = Vec::new();
+                    while !self.eat(&Tok::RParen) {
+                        match self.next() {
+                            Tok::Num(n) => parts.push(n),
+                            Tok::Comma => {}
+                            _ => {
+                                self.at -= 1;
+                                return self.unexpected("a number, or ')'");
+                            }
+                        }
+                    }
+                    value = format!("{value}({})", parts.join(","));
+                }
                 self.out.specs.push(SpecItem::Color { name, value, span });
                 Ok(())
             }
@@ -348,7 +398,11 @@ impl Parser {
     fn reference(&mut self) -> Res<Ref> {
         let span = self.span();
         let mut parts = vec![self.ident("an element name")?];
-        while *self.peek() == Tok::Dot && matches!(self.peek_at(1), Tok::Ident(_)) {
+        // A dot after a space is not part of the name: `a .uses b`.
+        while *self.peek() == Tok::Dot
+            && !self.tokens[self.at].spaced
+            && matches!(self.peek_at(1), Tok::Ident(_))
+        {
             self.next();
             parts.push(self.ident("an element name")?);
         }
@@ -363,9 +417,31 @@ impl Parser {
         }
     }
 
+    /// `{ key 'value'; key ['one', 'two'] }`: a list is the key once for
+    /// each of its values.
+    fn metadata_block(&mut self, metadata: &mut Vec<(String, String)>) -> Res<()> {
+        self.block(|p| {
+            let key = p.ident("a metadata key")?;
+            p.eat(&Tok::Colon);
+            if p.eat(&Tok::LBracket) {
+                while !p.eat(&Tok::RBracket) {
+                    if *p.peek() == Tok::Eof {
+                        return p.unexpected("']'");
+                    }
+                    metadata.push((key.clone(), p.value()?));
+                    p.eat(&Tok::Comma);
+                }
+                return Ok(());
+            }
+            let value = p.value()?;
+            metadata.push((key, value));
+            Ok(())
+        })
+    }
+
     fn model_item(&mut self, items: &mut Vec<ModelItem>) -> Res<()> {
         match self.peek().clone() {
-            Tok::Arrow | Tok::ArrowOpen => {
+            Tok::Arrow | Tok::ArrowOpen | Tok::BiArrow => {
                 items.push(ModelItem::Relation(self.relation(None)?));
                 Ok(())
             }
@@ -373,9 +449,17 @@ impl Parser {
                 if word == "extend" {
                     self.next();
                     let target = self.reference()?;
-                    let mut inner = Vec::new();
-                    self.block(|p| p.model_item(&mut inner))?;
-                    items.push(ModelItem::Extend { target, items: inner });
+                    // `extend a -> b 'title' { }`: a relationship.
+                    if matches!(self.peek(), Tok::Arrow | Tok::ArrowOpen | Tok::BiArrow | Tok::Dot) {
+                        items.push(ModelItem::ExtendRelation(self.relation(Some(target))?));
+                        return Ok(());
+                    }
+                    let mut more = Box::new(ElementDef { span: target.span, ..Default::default() });
+                    // Alone, it only says the element is there.
+                    if *self.peek() == Tok::LBrace {
+                        self.block(|p| p.element_item(&mut more))?;
+                    }
+                    items.push(ModelItem::Extend { target, more });
                     return Ok(());
                 }
                 match self.peek_at(1) {
@@ -394,7 +478,7 @@ impl Parser {
                         let name = self.ident("an element name")?;
                         items.push(ModelItem::Element(self.element(name, word, span)?));
                     }
-                    Tok::Arrow | Tok::ArrowOpen | Tok::Dot => {
+                    Tok::Arrow | Tok::ArrowOpen | Tok::BiArrow | Tok::Dot => {
                         let source = self.reference()?;
                         let implicit =
                             source.parts.len() == 1 && matches!(source.parts[0].as_str(), "this" | "it");
@@ -465,13 +549,19 @@ impl Parser {
                 }
                 ("metadata", Tok::LBrace) => {
                     self.next();
-                    return self.block(|p| {
-                        let key = p.ident("a metadata key")?;
-                        p.eat(&Tok::Colon);
-                        let value = p.value()?;
-                        el.metadata.push((key, value));
-                        Ok(())
+                    return self.metadata_block(&mut el.metadata);
+                }
+                // The description, kept in a file of its own: nothing here
+                // reads files, and a model is not always beside any.
+                ("descriptionFile", Tok::Raw(_) | Tok::Str(_)) => {
+                    self.errors.push(ParseError {
+                        span: self.span(),
+                        message: "'descriptionFile' is not supported yet; write the text as its description."
+                            .into(),
                     });
+                    self.next();
+                    self.next();
+                    return Ok(());
                 }
                 ("link", Tok::Raw(_) | Tok::Str(_)) => {
                     self.next();
@@ -495,14 +585,26 @@ impl Parser {
         self.model_item(&mut el.items)
     }
 
-    /// From the arrow on: `-> target 'title' 'technology' #tags { ... }`.
+    /// From the arrow on: `-> target 'title' 'description' 'technology'
+    /// #tags { ... }`.
     fn relation(&mut self, source: Option<Ref>) -> Res<RelationDef> {
         let span = source.as_ref().map(|s| s.span).unwrap_or(self.span());
+        let mut both = false;
         let kind = match self.next() {
             Tok::Arrow => None,
+            Tok::BiArrow => {
+                both = true;
+                None
+            }
             Tok::ArrowOpen => {
                 let kind = self.ident("a relationship kind")?;
-                self.expect(Tok::ArrowClose)?;
+                // `-[kind]->`, or `-[kind]<->` for one going both ways.
+                if self.eat(&Tok::RBracket) {
+                    self.expect(Tok::BiArrow)?;
+                    both = true;
+                } else {
+                    self.expect(Tok::ArrowClose)?;
+                }
                 Some(kind)
             }
             Tok::Dot => {
@@ -527,11 +629,17 @@ impl Parser {
             style: StyleProps::default(),
             metadata: Vec::new(),
             notation: None,
+            both,
         };
+        // Up to three strings: title, description, technology.
         rel.title = self.opt_string();
         if rel.title.is_some() {
             self.eat(&Tok::Comma);
-            rel.technology = self.opt_string();
+            rel.description = self.opt_string();
+            if rel.description.is_some() {
+                self.eat(&Tok::Comma);
+                rel.technology = self.opt_string();
+            }
         }
         self.tags(&mut rel.tags);
         if *self.peek() == Tok::LBrace {
@@ -551,13 +659,7 @@ impl Parser {
                     }
                     "metadata" if *p.peek_at(1) == Tok::LBrace => {
                         p.next();
-                        p.block(|p| {
-                            let key = p.ident("a metadata key")?;
-                            p.eat(&Tok::Colon);
-                            let value = p.value()?;
-                            rel.metadata.push((key, value));
-                            Ok(())
-                        })
+                        p.metadata_block(&mut rel.metadata)
                     }
                     "link" => {
                         p.next();
@@ -598,6 +700,13 @@ impl Parser {
         if self.eat_word("global") {
             let rule = self.global_rule()?;
             self.out.view_styles.last_mut().expect("inside a views block").push(rule);
+            return Ok(());
+        }
+        // Where this block's folder comes among the others.
+        if self.is_word("order") && matches!(self.peek_at(1), Tok::Num(_)) {
+            self.warn_here("'order' is not supported yet; views are listed in the order they are written.");
+            self.next();
+            self.next();
             return Ok(());
         }
         if self.is_word("deployment") {
@@ -667,8 +776,55 @@ impl Parser {
                 }
             }
             "link" => {
+                self.errors.push(ParseError {
+                    span,
+                    message: "A link on a view is not supported yet; it is not shown anywhere.".into(),
+                });
                 self.value()?;
                 self.opt_string();
+            }
+            // `group 'Title' { color amber; include a, b }`: what it
+            // includes is included; the frame around them is not drawn.
+            "group" => {
+                self.errors.push(ParseError {
+                    span,
+                    message:
+                        "'group' is not supported yet; what it includes is shown without a frame around it."
+                            .into(),
+                });
+                self.group(view)?;
+            }
+            // Where this view comes among the others in its folder.
+            "order" if matches!(self.peek(), Tok::Num(_)) => {
+                self.errors.push(ParseError {
+                    span,
+                    message: "'order' is not supported yet; views are listed in the order they are written."
+                        .into(),
+                });
+                self.next();
+            }
+            // `rank same { a, b }`: which row things are put in.
+            "rank" => {
+                self.errors.push(ParseError {
+                    span,
+                    message: "'rank' is not supported yet; the layout chooses the rows.".into(),
+                });
+                if matches!(self.peek(), Tok::Ident(_)) {
+                    self.next();
+                }
+                self.skip_block()?;
+            }
+            "routing" => {
+                let at = self.span();
+                let how = self.ident("'spline' or 'ortho'")?;
+                match how.as_str() {
+                    "spline" => {}
+                    "ortho" => self.errors.push(ParseError {
+                        span: at,
+                        message: "'ortho' routing is not supported yet; lines are drawn as curves.".into(),
+                    }),
+                    _ => return self.fail(at, format!("Unknown routing '{how}': use spline or ortho.")),
+                }
             }
             "include" => {
                 let predicates = self.predicates()?;
@@ -745,6 +901,72 @@ impl Parser {
         Ok(())
     }
 
+    /// A warning: something LikeC4 reads that is not drawn here yet. The
+    /// message says "not supported yet", which is what makes it one.
+    fn warn_here(&mut self, message: &str) {
+        self.errors.push(ParseError { span: self.span(), message: message.into() });
+    }
+
+    /// The inside of a `group`: its own looks, which are passed over, and
+    /// the rules that say what is in it, which are the view's.
+    fn group(&mut self, view: &mut ViewDef) -> Res<()> {
+        self.opt_string();
+        self.block(|p| {
+            let at = p.span();
+            let word = p.ident("'include', 'exclude' or 'group'")?;
+            match word.as_str() {
+                "include" => view.rules.push(ViewRule::Include(p.predicates()?)),
+                "exclude" => view.rules.push(ViewRule::Exclude(p.predicates()?)),
+                "group" => p.group(view)?,
+                "global" => {
+                    let rule = p.global_rule()?;
+                    view.rules.push(rule);
+                }
+                "color" | "border" | "opacity" | "multiple" | "title" => {
+                    p.eat(&Tok::Colon);
+                    p.value()?;
+                }
+                _ => return p.fail(at, format!("Expected 'include', 'exclude' or 'group', found '{word}'.")),
+            }
+            Ok(())
+        })
+    }
+
+    /// `opt 'if not cached' { ... }`, `loop`, `alt`, `try`/`catch`: steps
+    /// that happen only sometimes, or more than once. Their steps are
+    /// taken as steps like any other, in the order written.
+    fn flow_block(&mut self, view: &mut ViewDef, outermost: bool) -> Res<()> {
+        // What carries one on (`catch`, `else`) was spoken for by its start.
+        let carries_on = ["catch", "finally", "else"].iter().any(|w| self.is_word(w));
+        if outermost && !carries_on {
+            self.warn_here(
+                "Blocks of steps ('opt', 'loop', 'alt', 'try') are not supported yet; their steps are shown as ordinary steps, in order.",
+            );
+        }
+        self.next();
+        self.opt_string();
+        self.block(|p| {
+            if p.starts_flow_block() {
+                return p.flow_block(view, false);
+            }
+            if p.starts_step() {
+                let mut steps = Vec::new();
+                let result = p.steps(&mut steps);
+                view.steps.extend(steps.into_iter().map(StepItem::One));
+                return result;
+            }
+            p.unexpected("a step, like 'a -> b'")
+        })
+    }
+
+    fn starts_flow_block(&self) -> bool {
+        const WORDS: [&str; 11] =
+            ["opt", "loop", "alt", "break", "try", "catch", "finally", "when", "if", "else", "critical"];
+        matches!(self.peek(), Tok::Ident(w) if WORDS.contains(&w.as_str()))
+            && (matches!(self.peek_at(1), Tok::LBrace)
+                || (matches!(self.peek_at(1), Tok::Str(_)) && matches!(self.peek_at(2), Tok::LBrace)))
+    }
+
     fn starts_step(&self) -> bool {
         matches!(self.peek(), Tok::Ident(_))
             && matches!(self.peek_at(1), Tok::Arrow | Tok::BackArrow | Tok::ArrowOpen | Tok::Dot)
@@ -767,6 +989,9 @@ impl Parser {
             });
             view.steps.push(StepItem::Parallel(steps));
             return result;
+        }
+        if self.starts_flow_block() {
+            return self.flow_block(view, true);
         }
         if self.is_word("variant") {
             self.next();
@@ -836,6 +1061,7 @@ impl Parser {
                             p.style_block(&mut step.style)
                         }
                         "metadata" if *p.peek_at(1) == Tok::LBrace => {
+                            p.warn_here("'metadata' on a step is not supported yet; it is ignored.");
                             p.next();
                             p.skip_block()
                         }
@@ -883,7 +1109,7 @@ impl Parser {
         while self.eat(&Tok::Comma) {
             // A trailing comma is fine: what follows is the next rule.
             let starts_predicate = match self.peek() {
-                Tok::Star | Tok::Arrow => true,
+                Tok::Star | Tok::Arrow | Tok::ArrowOpen => true,
                 Tok::Ident(word) => {
                     !matches!(
                         word.as_str(),
@@ -900,14 +1126,58 @@ impl Parser {
         Ok(out)
     }
 
+    /// What comes after a relationship predicate: `where ...`, and
+    /// `with { ... }`. `kind`: the one its arrow named, `-[kind]->`, which
+    /// is a condition like any other.
+    fn relation_predicate(&mut self, rel: RelExpr, kind: Option<String>) -> Res<Predicate> {
+        let mut cond = self.opt_where()?;
+        if let Some(name) = kind {
+            let of_kind = Condition::Kind { of: Whose::Own, name, eq: true };
+            cond = Some(match cond {
+                Some(more) => Condition::And(Box::new(of_kind), Box::new(more)),
+                None => of_kind,
+            });
+        }
+        if self.is_word("with") && *self.peek_at(1) == Tok::LBrace {
+            self.warn_here(
+                "'with' after a relationship is not supported yet; the line is drawn as the model has it.",
+            );
+            self.next();
+            self.skip_block()?;
+        }
+        Ok(Predicate::Relation(rel, cond))
+    }
+
+    /// The arrow of a relationship predicate, if one is next: whether it
+    /// was there, and the kind it named (`-[kind]->`, or `.kind`).
+    fn predicate_arrow(&mut self) -> Res<Option<Option<String>>> {
+        if self.eat(&Tok::Arrow) || self.eat(&Tok::BiArrow) {
+            return Ok(Some(None));
+        }
+        if self.eat(&Tok::ArrowOpen) {
+            let kind = self.ident("a relationship kind")?;
+            self.expect(Tok::ArrowClose)?;
+            return Ok(Some(Some(kind)));
+        }
+        // `a .kind b`: the dot stands apart from the name before it.
+        if *self.peek() == Tok::Dot && self.tokens[self.at].spaced && matches!(self.peek_at(1), Tok::Ident(_))
+        {
+            self.next();
+            return Ok(Some(Some(self.ident("a relationship kind")?)));
+        }
+        Ok(None)
+    }
+
     fn predicate(&mut self) -> Res<Predicate> {
-        if self.eat(&Tok::Arrow) {
+        if matches!(self.peek(), Tok::Arrow | Tok::ArrowOpen)
+            && let Some(kind) = self.predicate_arrow()?
+        {
             let expr = self.element_expr()?;
             let rel = if self.eat(&Tok::Arrow) { RelExpr::InOut(expr) } else { RelExpr::Incoming(expr) };
-            return Ok(Predicate::Relation(rel, self.opt_where()?));
+            return self.relation_predicate(rel, kind);
         }
         let expr = self.element_expr()?;
-        if self.eat(&Tok::Arrow) || self.eat(&Tok::BiArrow) {
+        if let Some(kind) = self.predicate_arrow()? {
             let starts_expr = match self.peek() {
                 Tok::Star => true,
                 Tok::Ident(word) => !matches!(
@@ -923,7 +1193,7 @@ impl Parser {
             } else {
                 RelExpr::Outgoing(expr)
             };
-            return Ok(Predicate::Relation(rel, self.opt_where()?));
+            return self.relation_predicate(rel, kind);
         }
         let at = self.span();
         let cond = self.opt_where()?;
@@ -1110,7 +1380,7 @@ impl Parser {
             });
         }
         let reference = self.reference()?;
-        if *self.peek() == Tok::Dot {
+        if *self.peek() == Tok::Dot && !self.tokens[self.at].spaced {
             if *self.peek_at(1) == Tok::Star {
                 self.next();
                 self.next();
@@ -1156,7 +1426,7 @@ mod tests {
                 style { shape browser; color: green }
                 api = service 'API' 'Serves' 'Rust'
                 -> customer 'emails'
-                api -[async]-> customer 'notifies' 'SMTP' { line dotted }
+                api -[async]-> customer 'notifies' 'By email' 'SMTP' { line dotted }
             }
         }");
         assert_eq!(file.model.len(), 2);
