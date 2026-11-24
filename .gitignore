@@ -8,3 +8,4 @@ user.bazelrc
 .claude/settings.local.json
 node_modules/
 /dist/
+/out/
