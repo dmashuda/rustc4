@@ -4,6 +4,7 @@
 
 mod diagram;
 mod graph;
+mod sequence;
 pub mod text;
 pub mod theme;
 
@@ -11,7 +12,7 @@ use std::collections::BTreeMap;
 
 use c4_model::{Arrow, ComputedView, Direction, Line, ViewNode};
 
-pub use diagram::{Anchor, Diagram, Edge, Label, LineStyle, Marker, Node, Point, Shape, TextRole};
+pub use diagram::{Anchor, Diagram, Edge, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole};
 pub use text::FONT_FAMILY;
 
 const TITLE_SIZE: f64 = 15.0;
@@ -103,7 +104,25 @@ fn size(node: &ViewNode) -> Sized {
 
 /// Lays out a view. `colors` are the model's own (`Model::colors`).
 pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram {
-    let horizontal = matches!(view.direction, Direction::LeftRight | Direction::RightLeft);
+    // A sequence has only who takes part, side by side in the order they
+    // come into it: no groups, and nobody who only stands by.
+    let participants;
+    let view = if view.sequence {
+        let mut nodes: Vec<ViewNode> = Vec::new();
+        for end in view.edges.iter().flat_map(|e| [&e.source, &e.target]) {
+            if !nodes.iter().any(|n| n.id == *end)
+                && let Some(node) = view.nodes.iter().find(|n| n.id == *end)
+            {
+                nodes.push(ViewNode { parent: None, group: false, ..node.clone() });
+            }
+        }
+        participants = ComputedView { nodes, ..view.clone() };
+        &participants
+    } else {
+        view
+    };
+    // Words go over a step's line, centered, as under a line going across.
+    let horizontal = view.sequence || matches!(view.direction, Direction::LeftRight | Direction::RightLeft);
     let index: BTreeMap<&str, usize> =
         view.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
 
@@ -157,7 +176,23 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
         edge_text.push(EdgeText { lines, technology, w: w.ceil(), h });
     }
 
-    let placed = graph::layout(&in_nodes, &in_edges, view.direction);
+    let (placed, lines_down) = if view.sequence {
+        sequence::layout(&in_nodes, &in_edges)
+    } else {
+        (graph::layout(&in_nodes, &in_edges, view.direction), Vec::new())
+    };
+    let lifelines = view
+        .nodes
+        .iter()
+        .zip(&lines_down)
+        .map(|(node, line)| Lifeline {
+            node: node.id.clone(),
+            from: Point { x: round(line.x), y: round(line.top) },
+            to: Point { x: round(line.x), y: round(line.bottom) },
+            color: theme::LINE_GRAY.to_string(),
+            line: LineStyle::Dashed,
+        })
+        .collect();
 
     // ------------------------------------------------------------ nodes --
     let depth_of = |mut i: usize| -> u32 {
@@ -341,6 +376,7 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
         font_family: FONT_FAMILY.to_string(),
         nodes,
         edges,
+        lifelines,
     }
 }
 
@@ -544,5 +580,119 @@ mod tests {
         // Leaves straight down.
         assert!(path[1].x == 0.0 && path[2].x == 0.0);
         assert!(smooth(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_sequence_puts_each_step_under_the_last() {
+        let source = SHOP.replace(
+            "view index { include * }",
+            "view index { include * }
+            dynamic view buying {
+                variant sequence
+                include shop
+                customer -> shop.ui 'opens the shop'
+                shop.ui -> shop.api
+                shop.api -> shop.db 'looks up what is for sale, which takes a while'
+                customer <- shop.ui 'shows it'
+            }",
+        );
+        let ws = load(&[Source { name: "shop.c4".into(), text: source }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        let d = layout(&ws.model.compute_view("buying").unwrap(), &ws.model.colors);
+        // Who takes part, in the order they come into it; no group.
+        let ids: Vec<&str> = d.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["customer", "shop.ui", "shop.api", "shop.db"]);
+        assert!(d.nodes.iter().all(|n| !n.group && n.parent.is_none()));
+        // Side by side, standing on one line, a line down from the middle of each.
+        assert_eq!(d.lifelines.len(), 4);
+        for (pair, line) in d.nodes.windows(2).zip(&d.lifelines) {
+            assert!(pair[0].x + pair[0].width < pair[1].x);
+            assert_eq!(pair[0].y + pair[0].height, pair[1].y + pair[1].height);
+            assert_eq!(line.from.x, pair[0].x + pair[0].width / 2.0);
+            assert_eq!(line.from.y, pair[0].y + pair[0].height);
+            assert!(line.to.y < d.height);
+        }
+        // Each step level, from one line down to another, under the one before.
+        let mut last = d.lifelines[0].from.y;
+        for edge in &d.edges {
+            let (start, end) = (edge.path[0], *edge.path.last().unwrap());
+            assert_eq!(start.y, end.y);
+            assert!(start.y > last && start.y < d.lifelines[0].to.y);
+            last = start.y;
+            let x_of = |id: &str| d.lifelines.iter().find(|l| l.node == id).unwrap().from.x;
+            assert_eq!(start.x, x_of(&edge.source));
+            // Its words fit between the two, above the line.
+            let (lo, hi) =
+                (x_of(&edge.source).min(x_of(&edge.target)), x_of(&edge.source).max(x_of(&edge.target)));
+            for label in &edge.labels {
+                let half = text::width(&label.text, label.size, label.bold) / 2.0;
+                assert!(label.x - half > lo && label.x + half < hi && label.y < start.y, "{label:?}");
+            }
+        }
+        assert_eq!(d.edges[3].title, "4. shows it");
+        assert!(d.edges[3].path[0].x > d.edges[3].path.last().unwrap().x, "an answer goes back");
+        // Any other view has no lines down.
+        assert!(diagram("index").lifelines.is_empty());
+    }
+
+    #[test]
+    fn a_step_it_takes_alone_is_a_loop_beside_it() {
+        for variant in ["variant sequence", "autoLayout TopBottom", "autoLayout LeftRight"] {
+            let source = SHOP.replace(
+                "view index { include * }",
+                &format!(
+                    "view index {{ include * }}
+                    dynamic view buying {{
+                        {variant}
+                        customer -> shop.ui 'opens the shop'
+                        shop.ui -> shop.api
+                        shop.api -> shop.api 'checks the stock'
+                        shop.api -> shop.db
+                        shop.db -> shop.db 'locks a row'
+                    }}"
+                ),
+            );
+            let ws = load(&[Source { name: "shop.c4".into(), text: source }]);
+            assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+            let d = layout(&ws.model.compute_view("buying").unwrap(), &ws.model.colors);
+            for (step, on) in [("shop.api->shop.api#3", "shop.api"), ("shop.db->shop.db#5", "shop.db")] {
+                let edge = d.edges.iter().find(|e| e.id == step).expect(step);
+                let start = edge.path[0];
+                // Out of one side of it and back to the same side.
+                let at = |p: Point| match d.lifelines.iter().find(|l| l.node == on) {
+                    Some(line) => p.x == line.from.x,
+                    None => {
+                        let n = d.nodes.iter().find(|n| n.id == on).unwrap();
+                        let side = if variant.ends_with("TopBottom") {
+                            p.x == n.x + n.width
+                        } else {
+                            p.y == n.y + n.height
+                        };
+                        side && n.x <= p.x && p.x <= n.x + n.width && n.y <= p.y && p.y <= n.y + n.height
+                    }
+                };
+                assert!(at(start) && at(edge.markers[0].points[0]), "{variant}: {step} {edge:?}");
+                // Its words beside it (below, when lines go across), clear of every
+                // box and inside the drawing.
+                let label = &edge.labels[0];
+                let half = text::width(&label.text, label.size, label.bold) / 2.0;
+                let (left, right) = match label.anchor {
+                    Anchor::Start => (label.x, label.x + 2.0 * half),
+                    _ => (label.x - half, label.x + half),
+                };
+                let beside = match variant.ends_with("LeftRight") {
+                    true => label.y - label.size > start.y,
+                    false => left > start.x,
+                };
+                assert!(beside && right < d.width && label.y < d.height, "{variant}: {label:?}");
+                for n in &d.nodes {
+                    let overlaps = left < n.x + n.width
+                        && right > n.x
+                        && label.y > n.y
+                        && label.y - label.size < n.y + n.height;
+                    assert!(!overlaps, "{variant}: {label:?} over {}", n.id);
+                }
+            }
+        }
     }
 }

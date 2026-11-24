@@ -107,6 +107,8 @@ pub struct Element {
     pub kind: String,
     pub title: String,
     pub description: String,
+    /// What its box says, if not the description.
+    pub summary: String,
     pub technology: String,
     pub tags: Vec<String>,
     /// (url, title)
@@ -116,6 +118,13 @@ pub struct Element {
     pub children: Vec<usize>,
     pub style: ElementStyle,
     pub origin: Origin,
+}
+
+impl Element {
+    /// What its box says: the summary, or the description if it has none.
+    pub fn summary_or_description(&self) -> &str {
+        if self.summary.is_empty() { &self.description } else { &self.summary }
+    }
 }
 
 /// Where something was written: in a model gathered from many
@@ -158,6 +167,26 @@ pub struct View {
     pub(crate) rules: Vec<ViewRule>,
     /// The view whose rules come before this one's, and where that was written.
     pub(crate) extends: Option<(String, Span)>,
+    /// A `dynamic view`: it shows its steps, in order, rather than the
+    /// model's relationships.
+    pub dynamic: bool,
+    /// Drawn as a sequence: a line down from each participant, the steps
+    /// one under another.
+    pub sequence: bool,
+    pub(crate) steps: Vec<Step>,
+}
+
+/// One step of a dynamic view, resolved.
+#[derive(Debug)]
+pub(crate) struct Step {
+    /// `3`, or `3.1` for one of several at once.
+    pub number: String,
+    pub source: usize,
+    pub target: usize,
+    pub title: String,
+    pub technology: String,
+    pub notes: String,
+    pub style: RelationStyle,
 }
 
 #[derive(Debug, Default)]
@@ -401,6 +430,9 @@ pub fn load(sources: &[Source]) -> Workspace {
             of: None,
             rules: everything(),
             extends: None,
+            dynamic: false,
+            sequence: false,
+            steps: Vec::new(),
         });
     }
     // Anything with something inside it can be looked into, whether or not
@@ -422,6 +454,9 @@ pub fn load(sources: &[Source]) -> Workspace {
             of: Some(i),
             rules: everything(),
             extends: None,
+            dynamic: false,
+            sequence: false,
+            steps: Vec::new(),
         };
         b.model.generated_views.push(view);
     }
@@ -634,6 +669,7 @@ impl Builder<'_> {
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| def.name.clone()),
             description: tidy(def.description.as_deref().unwrap_or_default()),
+            summary: tidy(def.summary.as_deref().unwrap_or_default()),
             technology: tidy(def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default()),
             tags: def.tags.clone(),
             links: def
@@ -779,6 +815,29 @@ impl Builder<'_> {
         }
         let mut rules = shared_styles.to_vec();
         rules.extend(def.rules.iter().cloned());
+        let mut steps = Vec::new();
+        let mut count = 0;
+        for item in &def.steps {
+            count += 1;
+            match item {
+                ast::StepItem::One(step) => match self.step(step, count.to_string()) {
+                    Some(step) => steps.push(step),
+                    None => count -= 1,
+                },
+                ast::StepItem::Parallel(together) => {
+                    let mut part = 0;
+                    for step in together {
+                        if let Some(step) = self.step(step, format!("{count}.{}", part + 1)) {
+                            steps.push(step);
+                            part += 1;
+                        }
+                    }
+                    if part == 0 {
+                        count -= 1;
+                    }
+                }
+            }
+        }
         self.model.views.push(View {
             id,
             title,
@@ -786,7 +845,73 @@ impl Builder<'_> {
             of,
             rules,
             extends: def.extends.clone(),
+            dynamic: def.dynamic,
+            sequence: def.sequence,
+            steps,
         });
+    }
+
+    /// A step's ends and looks. Said like the relationship the model has
+    /// between the two, unless the step says otherwise.
+    fn step(&mut self, def: &ast::StepDef, number: String) -> Option<Step> {
+        let source = self.find(&def.source, None);
+        let target = self.find(&def.target, None);
+        let (source, target) = (source?, target?);
+        // To itself is a step (something it does by itself); to what it is
+        // part of, or contains, is not.
+        if self.model.is_ancestor(source, target) || self.model.is_ancestor(target, source) {
+            self.error(def.span, "A step cannot go between an element and something inside it: name two elements side by side, or one twice for a step it takes alone.".into());
+            return None;
+        }
+        // An answer going back is not the relationship that goes forward.
+        let modelled = (!def.backward)
+            .then(|| {
+                let exact = self.model.relations.iter().find(|r| r.source == source && r.target == target);
+                // Nothing inside an element speaks for a step it takes alone.
+                exact.or_else(|| {
+                    self.model.relations.iter().filter(|_| source != target).find(|r| {
+                        self.model.is_ancestor_or_self(source, r.source)
+                            && self.model.is_ancestor_or_self(target, r.target)
+                    })
+                })
+            })
+            .flatten();
+        let (mut style, mut title, mut technology) = match modelled {
+            Some(r) => (r.style.clone(), r.title.clone(), r.technology.clone()),
+            None => (RelationStyle::default(), String::new(), String::new()),
+        };
+        if let Some(kind) = &def.kind {
+            match self.rel_kinds.get(kind) {
+                Some(spec) => {
+                    style = spec.style.clone();
+                    if let Some(t) = &spec.technology {
+                        technology = t.clone();
+                    }
+                }
+                None => self.error(
+                    def.span,
+                    format!(
+                        "Unknown relationship kind '{kind}'. Add it: specification {{ relationship {kind} }}."
+                    ),
+                ),
+            }
+        }
+        self.relation_style(&def.style, &mut style);
+        if let Some(t) = &def.title {
+            title = tidy(t);
+        }
+        if let Some(t) = &def.technology {
+            technology = tidy(t);
+        }
+        Some(Step {
+            number,
+            source,
+            target,
+            title,
+            technology,
+            notes: tidy(def.notes.as_deref().unwrap_or_default()),
+            style,
+        })
     }
 
     fn check_rule(&mut self, rule: &ViewRule, scope: Option<usize>) {
@@ -805,7 +930,7 @@ impl Builder<'_> {
                                     .filter(|(k, ..)| {
                                         !matches!(
                                             k.as_str(),
-                                            "title" | "description" | "technology" | "navigateTo"
+                                            "title" | "description" | "summary" | "technology" | "navigateTo"
                                         )
                                     })
                                     .cloned()

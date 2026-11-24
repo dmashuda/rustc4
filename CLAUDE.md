@@ -52,8 +52,25 @@ thin bindings, renderers that only draw.
   specifications may repeat, and every element and relationship keeps its
   `Origin`. `Model::views` are the written views; `generated_views` (one per
   element with children and no written view) are reachable but not listed.
+- **A dynamic view shows its steps**, not the model's relationships: each
+  step is its own line, numbered in its label (`3`, `3.1` inside
+  `parallel`), drawn by the same layout. A step takes its words and looks
+  from the relationship the model has between its two ends unless it says
+  otherwise; one written backwards (`a <- b`) takes nothing. A step an
+  element takes alone (`a -> a`) is a loop out of its side, with room
+  kept for its words.
+- **A box says its `summary`**, or its description if it has none; the
+  details panel gives the description (the summary if there is none), and
+  `describe` gives both.
+- **`variant sequence`** is the same steps laid out by
+  `c4_layout/src/sequence.rs` instead of `graph.rs`: the steps' ends side
+  by side in the order they first appear (no groups, nobody who only
+  stands by), a `Lifeline` down from each, one level line per step.
+  Lifelines are in the `Diagram`, drawn behind everything, and are not
+  tapped or faded.
 - **Ids are API.** `view.<id>`, `node.<fqn>`, `open.<fqn>`,
-  `edge.<source>-><target>`, `back`, `canvas`, `details.close`, `file.<n>`,
+  `edge.<source>-><target>` (a step of a dynamic view:
+  `edge.<source>-><target>#<step>`), `back`, `canvas`, `details.close`, `file.<n>`,
   `file.add`, `file.remove`.
   Tests address things by them.
 - `c4_model` has no dependencies. `c4_layout` adds only serde (the Diagram

@@ -429,7 +429,7 @@ impl Parser {
                 match word.as_str() {
                     "title" => el.title = Some(value),
                     "description" => el.description = Some(value),
-                    "summary" if el.description.is_none() => el.description = Some(value),
+                    "summary" => el.summary = Some(value),
                     "technology" => el.technology = Some(value),
                     _ => {}
                 }
@@ -563,17 +563,18 @@ impl Parser {
             self.out.view_styles.push(rule);
             return Ok(());
         }
-        if self.is_word("dynamic") || self.is_word("deployment") {
-            let Tok::Ident(word) = self.next() else { unreachable!() };
+        if self.is_word("deployment") {
+            self.next();
             self.errors.push(ParseError {
                 span,
-                message: format!("{word} views are not supported yet; this one is ignored."),
+                message: "deployment views are not supported yet; this one is ignored.".into(),
             });
             while !matches!(self.peek(), Tok::LBrace | Tok::Eof) {
                 self.next();
             }
             return self.skip_block();
         }
+        let dynamic = self.eat_word("dynamic");
         if !self.eat_word("view") {
             return self.unexpected("'view'");
         }
@@ -586,7 +587,16 @@ impl Parser {
             description: None,
             tags: Vec::new(),
             rules: Vec::new(),
+            dynamic,
+            sequence: false,
+            steps: Vec::new(),
         };
+        if dynamic {
+            view.id = Some(self.ident("a name for this dynamic view")?);
+            self.block(|p| p.dynamic_item(&mut view))?;
+            self.out.views.push(view);
+            return Ok(());
+        }
         if !(self.is_word("of") || self.is_word("extends")) && matches!(self.peek(), Tok::Ident(_)) {
             view.id = Some(self.ident("a view name")?);
         }
@@ -668,6 +678,125 @@ impl Parser {
             }
         }
         Ok(())
+    }
+
+    fn starts_step(&self) -> bool {
+        matches!(self.peek(), Tok::Ident(_))
+            && matches!(self.peek_at(1), Tok::Arrow | Tok::BackArrow | Tok::ArrowOpen | Tok::Dot)
+    }
+
+    /// What a dynamic view holds: steps, and the same `title`, `include`,
+    /// `style` and `autoLayout` as any view.
+    fn dynamic_item(&mut self, view: &mut ViewDef) -> Res<()> {
+        if self.starts_step() {
+            let mut steps = Vec::new();
+            let result = self.steps(&mut steps);
+            view.steps.extend(steps.into_iter().map(StepItem::One));
+            return result;
+        }
+        if (self.is_word("parallel") || self.is_word("par")) && *self.peek_at(1) == Tok::LBrace {
+            self.next();
+            let mut steps = Vec::new();
+            let result = self.block(|p| {
+                if p.starts_step() { p.steps(&mut steps) } else { p.unexpected("a step, like 'a -> b'") }
+            });
+            view.steps.push(StepItem::Parallel(steps));
+            return result;
+        }
+        if self.is_word("variant") {
+            self.next();
+            let at = self.span();
+            let variant = self.ident("'diagram' or 'sequence'")?;
+            view.sequence = match variant.as_str() {
+                "sequence" => true,
+                "diagram" => false,
+                _ => return self.fail(at, format!("Unknown variant '{variant}': use diagram or sequence.")),
+            };
+            return Ok(());
+        }
+        self.view_item(view)
+    }
+
+    /// `a -> b 'title'`, and on along a chain: `a -> b -> c`.
+    fn steps(&mut self, out: &mut Vec<StepDef>) -> Res<()> {
+        let mut from = self.reference()?;
+        loop {
+            let span = from.span;
+            let (kind, backward) = match self.next() {
+                Tok::Arrow => (None, false),
+                Tok::BackArrow => (None, true),
+                Tok::ArrowOpen => {
+                    let kind = self.ident("a relationship kind")?;
+                    self.expect(Tok::ArrowClose)?;
+                    (Some(kind), false)
+                }
+                _ => {
+                    self.at -= 1;
+                    return self.unexpected("'->' or '<-'");
+                }
+            };
+            let to = self.reference()?;
+            let (source, target) = if backward { (to.clone(), from) } else { (from, to.clone()) };
+            let mut step = StepDef {
+                source,
+                target,
+                backward,
+                kind,
+                span,
+                title: None,
+                technology: None,
+                notes: None,
+                style: StyleProps::default(),
+            };
+            step.title = self.opt_string();
+            if step.title.is_some() {
+                self.eat(&Tok::Comma);
+                step.technology = self.opt_string();
+            }
+            let mut tags = Vec::new();
+            self.tags(&mut tags);
+            if *self.peek() == Tok::LBrace {
+                self.block(|p| {
+                    if matches!(p.peek(), Tok::Hash(_)) {
+                        p.tags(&mut tags);
+                        return Ok(());
+                    }
+                    let word = match p.peek() {
+                        Tok::Ident(word) => word.clone(),
+                        _ => return p.unexpected("a step property"),
+                    };
+                    match word.as_str() {
+                        "style" if *p.peek_at(1) == Tok::LBrace => {
+                            p.next();
+                            p.style_block(&mut step.style)
+                        }
+                        "metadata" if *p.peek_at(1) == Tok::LBrace => {
+                            p.next();
+                            p.skip_block()
+                        }
+                        "title" | "description" | "technology" | "notes" | "notation" => {
+                            p.next();
+                            p.eat(&Tok::Colon);
+                            let value = p.string("a string")?;
+                            match word.as_str() {
+                                "title" => step.title = Some(value),
+                                "technology" => step.technology = Some(value),
+                                "notes" => step.notes = Some(value),
+                                "description" if step.notes.is_none() => step.notes = Some(value),
+                                _ => {}
+                            }
+                            Ok(())
+                        }
+                        _ => p.style_prop(&mut step.style),
+                    }
+                })?;
+            }
+            out.push(step);
+            if !matches!(self.peek(), Tok::Arrow | Tok::BackArrow | Tok::ArrowOpen) {
+                return Ok(());
+            }
+            from = to;
+        }
     }
 
     /// `style a, b.* { color muted }`

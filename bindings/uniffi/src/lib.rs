@@ -12,7 +12,7 @@
 
 use std::sync::Mutex;
 
-use c4_layout::{Anchor, Diagram, Edge, Label, LineStyle, Marker, Node, Point, Shape, TextRole};
+use c4_layout::{Anchor, Diagram, Edge, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole};
 use c4_model::Source;
 use c4_ui::{Controls, Details, Editor, Export, ExportKind, Item, Link, Problem, Screen, Section};
 
@@ -120,6 +120,15 @@ pub struct Edge {
 }
 
 #[uniffi::remote(Record)]
+pub struct Lifeline {
+    pub node: String,
+    pub from: Point,
+    pub to: Point,
+    pub color: String,
+    pub line: LineStyle,
+}
+
+#[uniffi::remote(Record)]
 pub struct Diagram {
     pub id: String,
     pub title: String,
@@ -129,6 +138,7 @@ pub struct Diagram {
     pub font_family: String,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub lifelines: Vec<Lifeline>,
 }
 
 // ----------------------------------------------------------------- screen --

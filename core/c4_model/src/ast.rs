@@ -51,6 +51,7 @@ pub struct ElementDef {
     pub span: Span,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub summary: Option<String>,
     pub technology: Option<String>,
     pub tags: Vec<String>,
     /// (url, title)
@@ -92,6 +93,35 @@ pub struct ViewDef {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub rules: Vec<ViewRule>,
+    /// `dynamic view`: the steps below are what it shows.
+    pub dynamic: bool,
+    /// `variant sequence`
+    pub sequence: bool,
+    pub steps: Vec<StepItem>,
+}
+
+#[derive(Debug)]
+pub enum StepItem {
+    One(StepDef),
+    /// `parallel { ... }`: steps that happen at once.
+    Parallel(Vec<StepDef>),
+}
+
+/// One step of a dynamic view: `a -> b 'title'`, or `a <- b` for an answer
+/// going back.
+#[derive(Debug)]
+pub struct StepDef {
+    /// Where it starts and ends, whichever way it was written.
+    pub source: Ref,
+    pub target: Ref,
+    /// Written `target <- source`.
+    pub backward: bool,
+    pub kind: Option<String>,
+    pub span: Span,
+    pub title: Option<String>,
+    pub technology: Option<String>,
+    pub notes: Option<String>,
+    pub style: StyleProps,
 }
 
 #[derive(Debug, Clone)]

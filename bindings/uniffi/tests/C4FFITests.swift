@@ -9,7 +9,7 @@ final class C4FFITests: XCTestCase {
         let ui = C4Ui.example()
         let screen = ui.screen()
         XCTAssertEqual(screen.title, "Landscape")
-        XCTAssertEqual(screen.views.map(\.id), ["view.index", "view.shop", "view.api", "view.orders"])
+        XCTAssertEqual(screen.views.map(\.id), ["view.index", "view.shop", "view.api", "view.orders", "view.checkout", "view.checkoutSequence"])
         XCTAssertEqual(screen.exports.map(\.kind), [.svg, .png])
         XCTAssertEqual(screen.controls.open, "Open…")
         XCTAssertEqual(screen.editor?.file, 0)

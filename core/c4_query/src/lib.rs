@@ -138,8 +138,8 @@ pub fn overview(model: &Model) -> String {
             if inside > 0 {
                 line.push_str(&format!(", {inside} inside"));
             }
-            if !el.description.is_empty() {
-                line.push_str(&format!(": {}", brief(&el.description)));
+            if !el.summary_or_description().is_empty() {
+                line.push_str(&format!(": {}", brief(el.summary_or_description())));
             }
             line
         })
@@ -186,7 +186,7 @@ fn hits(model: &Model, query: &str, kind: Option<&str>, tag: Option<&str>) -> Ve
             el.metadata.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(" ")
         )
         .to_lowercase();
-        let description = el.description.to_lowercase();
+        let description = format!("{} {}", el.summary, el.description).to_lowercase();
         let (mut matched, mut score) = (0u32, 0u32);
         for word in &words {
             let points = if name == *word || title == *word {
@@ -230,8 +230,8 @@ pub fn search(model: &Model, query: &str, kind: Option<&str>, tag: Option<&str>,
                 if !el.technology.is_empty() {
                     line.push_str(&format!(" [{}]", el.technology));
                 }
-                if !el.description.is_empty() {
-                    line.push_str(&format!(": {}", brief(&el.description)));
+                if !el.summary_or_description().is_empty() {
+                    line.push_str(&format!(": {}", brief(el.summary_or_description())));
                 }
                 line
             })
@@ -292,6 +292,7 @@ pub fn element(model: &Model, asked: &str) -> Result<String, String> {
         }
     };
     line("Technology", el.technology.clone());
+    line("Summary", el.summary.replace('\n', " "));
     line("Description", el.description.replace('\n', " "));
     line("Tags", el.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
     line("Written in", el.origin.to_string());
@@ -513,6 +514,9 @@ pub fn views(model: &Model) -> String {
         .iter()
         .map(|v| {
             let mut line = format!("- {}: {}", v.id, v.title);
+            if v.dynamic {
+                line.push_str(" (dynamic: steps in order)");
+            }
             if let Some(of) = v.of {
                 line.push_str(&format!(" (of {})", model.elements[of].fqn));
             }
@@ -564,6 +568,21 @@ pub fn view(model: &Model, id: &str) -> Result<String, String> {
         .edges
         .iter()
         .map(|edge| {
+            if !edge.step.is_empty() {
+                // A step says for itself what happens.
+                let said = edge.label.split_once(". ").map(|(_, title)| title).unwrap_or_default();
+                let mut line = format!("- {}. {} -> {}", edge.step, edge.source, edge.target);
+                if !said.is_empty() {
+                    line.push_str(&format!(": {said}"));
+                }
+                if !edge.technology.is_empty() {
+                    line.push_str(&format!(" [{}]", edge.technology));
+                }
+                if !edge.notes.is_empty() {
+                    line.push_str(&format!(" ({})", edge.notes.replace('\n', " ")));
+                }
+                return line;
+            }
             let mut line = format!("- {} -> {}", edge.source, edge.target);
             // A line standing for several relationships: say each.
             let said: Vec<String> =
@@ -579,7 +598,11 @@ pub fn view(model: &Model, id: &str) -> Result<String, String> {
     if !lines.is_empty() {
         out.push_str(&format!(
             "\n\n{}:\n{}",
-            plural(lines.len(), "relationship", "relationships"),
+            if view.dynamic {
+                plural(lines.len(), "step, in order", "steps, in order")
+            } else {
+                plural(lines.len(), "relationship", "relationships")
+            },
             listed(lines)
         ));
     }
@@ -601,7 +624,7 @@ mod tests {
     #[test]
     fn an_overview_to_start_from() {
         let text = overview(&shop());
-        assert!(text.starts_with("14 elements, 15 relationships, 4 views.\nKinds: service 5, "), "{text}");
+        assert!(text.starts_with("14 elements, 15 relationships, 6 views.\nKinds: service 5, "), "{text}");
         assert!(text.contains("\n- shop (Shop, system), 9 inside: Sells things online"), "{text}");
         assert!(text.contains("\n- customer (Customer, actor): Browses the catalogue and places orders"));
     }

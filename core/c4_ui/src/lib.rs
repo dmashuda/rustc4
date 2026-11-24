@@ -15,6 +15,7 @@
 //! | `node.<element>` | selects the element (in a diagram or a list) |
 //! | `open.<element>` | goes to the closer view of that element |
 //! | `edge.<source>-><target>` | selects the line between two elements |
+//! | `edge.<source>-><target>#<step>` | selects a step of a dynamic view |
 //! | `canvas` | selects nothing |
 //! | `back` | returns to the view before this one |
 //! | `details.close` | closes the panel |
@@ -633,7 +634,8 @@ impl C4Ui {
                     title: el.title.clone(),
                     subtitle: format!("{} · {}", el.kind, el.fqn),
                     technology: el.technology.clone(),
-                    description: el.description.clone(),
+                    description: if el.description.is_empty() { &el.summary } else { &el.description }
+                        .clone(),
                     tags: el.tags.clone(),
                     links: el
                         .links
@@ -675,18 +677,30 @@ impl C4Ui {
                         .detail(&target.kind)
                         .hint(&target.fqn),
                 ];
+                // A step says what happens; the relationships it rides on
+                // are in the model, if anyone wrote them.
+                let (subtitle, description) = if edge.step.is_empty() {
+                    (plural(rows.len(), "relationship", "relationships"), String::new())
+                } else {
+                    let said = edge.label.split_once(". ").map(|(_, title)| title).unwrap_or_default();
+                    let text: Vec<&str> =
+                        [said, edge.notes.as_str()].into_iter().filter(|t| !t.is_empty()).collect();
+                    (format!("Step {}", edge.step), text.join("\n\n"))
+                };
+                let mut sections = Vec::new();
+                if !rows.is_empty() || edge.step.is_empty() {
+                    sections.push(Section { title: "Relationships".into(), rows });
+                }
+                sections.push(Section { title: "Between".into(), rows: ends });
                 Some(Details {
                     title: format!("{} → {}", source.title, target.title),
-                    subtitle: plural(rows.len(), "relationship", "relationships"),
+                    subtitle,
                     technology: edge.technology.clone(),
-                    description: String::new(),
+                    description,
                     tags: Vec::new(),
                     links: Vec::new(),
                     actions: Vec::new(),
-                    sections: vec![
-                        Section { title: "Relationships".into(), rows },
-                        Section { title: "Between".into(), rows: ends },
-                    ],
+                    sections,
                     close,
                 })
             }
@@ -717,11 +731,18 @@ mod tests {
         assert_eq!(screen.description, "The shop and everything around it");
         assert_eq!(
             texts(&screen.views),
-            ["Landscape", "Inside the shop", "Inside the API", "An order, end to end"]
+            [
+                "Landscape",
+                "Inside the shop",
+                "Inside the API",
+                "An order, end to end",
+                "Placing an order",
+                "Placing an order, as a sequence"
+            ]
         );
         assert_eq!(screen.views.iter().filter(|v| v.selected).count(), 1);
         assert!(screen.views[0].selected && screen.views[0].id == "view.index");
-        assert_eq!(screen.status, "14 elements · 15 relationships · 4 views");
+        assert_eq!(screen.status, "14 elements · 15 relationships · 6 views");
         assert!(screen.back.is_none() && screen.details.is_none() && screen.editor.is_none());
         assert!(screen.problems.is_empty() && screen.problems_title.is_empty() && screen.empty.is_empty());
         assert_eq!(screen.diagram.as_ref().unwrap().nodes.len(), 5);
@@ -776,7 +797,10 @@ mod tests {
         assert_eq!(uses[4].id, "node.payments");
         assert_eq!(texts(&details.sections[1].rows), ["← Storefront", "← Mobile app"]);
         assert_eq!(texts(&details.sections[2].rows), ["Catalogue", "Orders", "Accounts"]);
-        assert_eq!(texts(&details.sections[3].rows), ["Inside the API", "An order, end to end"]);
+        assert_eq!(
+            texts(&details.sections[3].rows),
+            ["Inside the API", "An order, end to end", "Placing an order"]
+        );
 
         // From a row to another element, to another view, and it stays selected there.
         assert_eq!(ui.tap("node.shop.fulfilment").details.unwrap().tags, ["next"]);
@@ -989,6 +1013,31 @@ mod tests {
         assert_eq!(value["exports"][0]["fileName"], "index.svg");
         assert_eq!(value["exports"][0]["kind"], "Svg");
         assert_eq!(value["details"]["close"]["id"], "details.close");
-        assert_eq!(ui.view_ids(), ["index", "shop", "api", "orders"]);
+        assert_eq!(ui.view_ids(), ["index", "shop", "api", "orders", "checkout", "checkoutSequence"]);
+    }
+
+    #[test]
+    fn a_step_of_a_dynamic_view_says_which_it_is() {
+        let mut ui = shop(false);
+        ui.tap("view.checkout");
+        let diagram = ui.diagram().expect("a diagram");
+        let labels: Vec<String> = diagram.edges.iter().map(|e| e.title.clone()).collect();
+        assert_eq!(labels[0], "1. presses Buy");
+        assert_eq!(labels[2], "3. checks prices", "said as the model says it");
+        assert_eq!(labels[5], "6.1. saves the order");
+        // An answer going back points back.
+        assert_eq!(
+            (diagram.edges[4].source.as_str(), diagram.edges[4].target.as_str()),
+            ("payments", "shop.api.orders")
+        );
+        let screen = ui.tap("edge.shop.api.orders->payments#4");
+        assert_eq!(screen.selected, "edge.shop.api.orders->payments#4");
+        let details = screen.details.expect("details");
+        assert_eq!(details.subtitle, "Step 4");
+        assert_eq!(details.description, "charges the card");
+        assert_eq!(details.sections[0].title, "Relationships");
+        // Nothing in the model goes from the provider back to the shop.
+        let details = ui.tap("edge.payments->shop.api.orders#5").details.expect("details");
+        assert_eq!(details.sections.len(), 1);
     }
 }

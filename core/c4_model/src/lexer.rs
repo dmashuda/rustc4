@@ -22,6 +22,8 @@ pub enum Tok {
     Arrow,
     /// `<->`
     BiArrow,
+    /// `<-`
+    BackArrow,
     /// `-[`
     ArrowOpen,
     /// `]->`
@@ -48,6 +50,7 @@ impl Tok {
             Tok::Num(s) | Tok::Raw(s) => format!("'{s}'"),
             Tok::Arrow => "'->'".into(),
             Tok::BiArrow => "'<->'".into(),
+            Tok::BackArrow => "'<-'".into(),
             Tok::ArrowOpen => "'-['".into(),
             Tok::ArrowClose => "']->'".into(),
             Tok::Dot => "'.'".into(),
@@ -244,6 +247,7 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             ('-', '[') => (Tok::ArrowOpen, 2),
             (']', '-') if chars.get(i + 2) == Some(&'>') => (Tok::ArrowClose, 3),
             ('<', '-') if chars.get(i + 2) == Some(&'>') => (Tok::BiArrow, 3),
+            ('<', '-') => (Tok::BackArrow, 2),
             ('!', '=') => (Tok::Ne, 2),
             ('=', '=') => (Tok::Eq, 2),
             ('.', _) => (Tok::Dot, 1),

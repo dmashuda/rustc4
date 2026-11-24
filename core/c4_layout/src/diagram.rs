@@ -120,6 +120,19 @@ pub struct Edge {
     pub title: String,
 }
 
+/// In a sequence: the line down from a participant, which its steps
+/// start and end on. Drawn behind everything else, and not something to
+/// tap.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Lifeline {
+    /// The participant: a node's id.
+    pub node: String,
+    pub from: Point,
+    pub to: Point,
+    pub color: String,
+    pub line: LineStyle,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagram {
@@ -133,4 +146,6 @@ pub struct Diagram {
     /// Groups before what is inside them: draw in this order.
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Empty unless this is a sequence.
+    pub lifelines: Vec<Lifeline>,
 }
