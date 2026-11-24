@@ -663,6 +663,13 @@ impl Parser {
                 };
                 // Optional rank and node separation, which the layout here
                 // picks for itself.
+                if matches!(self.peek(), Tok::Num(_)) {
+                    self.errors.push(ParseError {
+                        span: self.span(),
+                        message: "Spacing after autoLayout is not supported yet; the layout picks its own."
+                            .into(),
+                    });
+                }
                 while matches!(self.peek(), Tok::Num(_)) {
                     self.next();
                 }

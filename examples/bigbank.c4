@@ -1,4 +1,8 @@
-// The "Big Bank plc" example from the C4 model, as LikeC4 writes it.
+// The "Big Bank plc" example from the C4 model (c4model.com, Simon Brown),
+// as LikeC4 writes it. Adapted from the LikeC4 project,
+// https://github.com/likec4/likec4
+// Copyright (c) 2023-2026 Denis Davydkov. MIT License: see LICENSE.likec4
+// beside this file.
 
 specification {
   element person {

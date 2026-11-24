@@ -1,8 +1,9 @@
 """rustc4: C4-style architecture diagrams as code. One Rust core, many targets.
 
 The toolchains live in bazel/*.MODULE.bazel, pulled in by the include() calls
-at the bottom. The layout is med-log's (github.com/dmashuda/med-log), with the
-Apple toolchain for the macOS app; Android's is still to come.
+at the bottom. The layout is rust-core-experiment's
+(github.com/dmashuda/rust-core-experiment), with the Apple toolchain for the
+macOS app; Android's is still to come.
 
   * apple_support is depended on before rules_cc, because Bazel takes the
     first registered C/C++ toolchain and only apple_support's targets macOS

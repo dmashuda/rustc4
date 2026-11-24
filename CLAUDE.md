@@ -21,12 +21,13 @@ After every change, `bazel test //...` must pass, Rust must be rustfmt-clean,
 and clippy must be quiet.
 
 A layout change cannot be judged from tests alone: export the examples as
-PNG and look at them.
+PNG and look at them. (`examples` holds two separate models, so that command
+reports the `customer` and `index` both define and exits 1; every view is
+still written.)
 
 ## Architecture rules
 
-The structure is med-log's (github.com/dmashuda/med-log): one Rust core,
-thin bindings, renderers that only draw.
+One Rust core, thin bindings, renderers that only draw.
 
 - **All behaviour lives in Rust.** The language and what a view shows:
   `core/c4_model`. Sizes, positions, colors, line breaks, curves:
@@ -126,6 +127,7 @@ invisible anchor inside it and is clipped at the border.
 
 ## Origin
 
-Build architecture and toolchains copied from med-log (and through it,
-rust-core-experiment, whose LOG.md documents the toolchain gotchas). The
-product is modelled on LikeC4.
+Build architecture and toolchains descend from rust-core-experiment
+(github.com/dmashuda/rust-core-experiment), whose LOG.md documents the
+toolchain gotchas. The product is modelled on LikeC4; `examples/bigbank.c4`
+is adapted from it, under the license beside it.

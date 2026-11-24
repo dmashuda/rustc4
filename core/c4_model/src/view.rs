@@ -535,7 +535,7 @@ impl Computing<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Source, load};
+    use crate::{Severity, Source, load};
 
     const SHOP: &str = "
         specification {
@@ -865,5 +865,44 @@ views { view v of missing { include * } }"
         assert_eq!(messages[3], "5:Unknown element kind 'widget'. The kinds specified are: box.");
         assert_eq!(messages[4], "6:A relationship needs two different elements.");
         assert_eq!(messages[5], "8:There is no element 'missing'.");
+    }
+
+    /// What LikeC4 reads and this does not draw is said, never dropped
+    /// quietly, and none of it stops the model.
+    #[test]
+    fn what_is_not_supported_is_a_warning() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification { element box { style { icon tech:rust } } }
+global { style x * { color red } }
+model {
+  a = box { icon aws:lambda }
+  b = box { style { size large } }
+  a -> b
+}
+views {
+  /** @likec4-generated(v1) abc */
+  view v { include * where kind is box
+    autoLayout LeftRight 120 110 }
+  deployment view d { include * }
+}"
+            .into(),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert!(ws.diagnostics.iter().all(|d| d.severity == Severity::Warning), "{messages:#?}");
+        assert_eq!(
+            messages,
+            [
+                "1:'icon' is not supported yet; it changes nothing in the drawing.",
+                "2:'global' blocks are not supported yet; this one is ignored.",
+                "4:'icon' is not supported yet; it changes nothing in the drawing.",
+                "5:'size' is not supported yet; it changes nothing in the drawing.",
+                "9:Manual layout is not supported yet; this view is laid out automatically.",
+                "10:'where' conditions are not supported yet.",
+                "11:Spacing after autoLayout is not supported yet; the layout picks its own.",
+                "12:deployment views are not supported yet; this one is ignored.",
+            ]
+        );
+        assert_eq!((ws.model.elements.len(), ws.model.relations.len(), ws.model.views.len()), (2, 1, 1));
     }
 }
