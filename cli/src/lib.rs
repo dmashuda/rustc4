@@ -133,6 +133,14 @@ fn collect(path: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// A file's name as the model knows it: with `/` between its parts, whatever
+/// this platform writes there. The model finds the files a source names
+/// (`icon`, `descriptionFile`) by that, a bundle made on one platform is read
+/// on another, and Windows opens a path written either way.
+fn slashed(name: &str, separator: char) -> String {
+    if separator == '/' { name.to_string() } else { name.replace(separator, "/") }
+}
+
 /// Every source file under the paths given, in a fixed order.
 pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>, String> {
     let mut sources = Vec::new();
@@ -147,7 +155,8 @@ pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>, String> {
         collect(path, &mut files)?;
         for file in files {
             let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            sources.push(Source { name: file.display().to_string(), text });
+            let name = slashed(&file.display().to_string(), std::path::MAIN_SEPARATOR);
+            sources.push(Source { name, text });
         }
     }
     if sources.is_empty() {
@@ -345,6 +354,12 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = run(&args, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn a_source_is_named_with_slashes_on_every_platform() {
+        assert_eq!(slashed("examples\\delivery\\delivery.c4", '\\'), "examples/delivery/delivery.c4");
+        assert_eq!(slashed("examples/a\\b.c4", '/'), "examples/a\\b.c4");
     }
 
     /// A fresh directory under the test's own temporary one.
