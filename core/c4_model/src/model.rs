@@ -137,6 +137,9 @@ pub struct ElementStyle {
     /// How big the icon is; as `size`, unless it says.
     pub icon_size: Option<Size>,
     pub icon_position: IconPosition,
+    /// What a legend says of it, where a style says: `style a { notation
+    /// 'Deprecated' }`. Otherwise its own, or its kind's.
+    pub notation: Option<String>,
 }
 
 impl Default for ElementStyle {
@@ -153,6 +156,7 @@ impl Default for ElementStyle {
             icon: None,
             icon_size: None,
             icon_position: IconPosition::Left,
+            notation: None,
         }
     }
 }
@@ -808,6 +812,7 @@ impl Builder<'_> {
                         style.icon = icon;
                     }
                 }
+                "notation" => style.notation = Some(tidy(value)),
                 "iconSize" => match Size::parse(value) {
                     Some(size) => style.icon_size = Some(size),
                     None => self.error(

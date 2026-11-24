@@ -246,6 +246,11 @@ impl Model {
                     apply_style(self, props, &mut style);
                 }
             }
+            // What a style says it is, over what its kind does; what
+            // `with` says, below, over both.
+            if let Some(notation) = &style.notation {
+                node.notation = notation.clone();
+            }
             if let Some(props) = c.overrides.get(&i) {
                 apply_style(self, props, &mut style);
                 for (key, value, _) in &props.0 {
@@ -444,6 +449,7 @@ fn apply_style(model: &Model, props: &StyleProps, style: &mut ElementStyle) {
                     style.icon = Some(href.clone());
                 }
             }
+            "notation" => style.notation = Some(value.trim().to_string()),
             "iconSize" => style.icon_size = Size::parse(value).or(style.icon_size),
             "iconPosition" => style.icon_position = IconPosition::parse(value).unwrap_or(style.icon_position),
             _ => {}
@@ -1174,8 +1180,15 @@ model {
 views {
   view v { include *, c with { notation 'In this view' } }
   dynamic view d { a -> b; a -[async]-> c; b -> c }
-}"
-            .into(),
+  view styled {
+    include *, b with { notation 'Said last' }
+    style a, b { notation 'Deprecated' }
+    style c { color red }
+  }
+  view shared { include *; global style old }
+}
+global { style old element.kind = box { notation 'Old' } }"
+                .into(),
         }]);
         assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
         let view = ws.model.compute_view("v").unwrap();
@@ -1187,6 +1200,13 @@ views {
         let steps = ws.model.compute_view("d").unwrap();
         let edges: Vec<_> = steps.edges.iter().map(|e| e.notation.as_str()).collect();
         assert_eq!(edges, ["Does not wait", "Does not wait", ""]);
+        // A view's style says it over the kind; `with` over the style.
+        let said = |id: &str| {
+            let view = ws.model.compute_view(id).unwrap();
+            view.nodes.iter().map(|n| n.notation.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(said("styled"), ["Deprecated", "Said last", ""]);
+        assert_eq!(said("shared"), ["Old", "Old", ""]);
     }
 
     /// The model the `where` and `global` tests ask about.
