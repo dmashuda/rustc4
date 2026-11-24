@@ -116,6 +116,16 @@ public struct C4View: View {
             .accessibilityIdentifier("back")
         }
         ToolbarItemGroup {
+            // There when the view has something a legend would explain.
+            if let legend = screen.legend {
+                Toggle(
+                    legend.text,
+                    isOn: Binding(get: { legend.selected }, set: { _ in model.tap(legend.id) })
+                )
+                .toggleStyle(.button)
+                .help(legend.hint)
+                .accessibilityIdentifier("legend")
+            }
             ForEach(screen.exports, id: \.fileName) { export in
                 Button(export.text) { save(export) }.help(export.hint)
             }

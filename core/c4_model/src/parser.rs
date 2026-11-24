@@ -255,7 +255,7 @@ impl Parser {
             "element" | "relationship" => {
                 let name = self.ident("a name for this kind")?;
                 let mut style = StyleProps::default();
-                let mut technology = None;
+                let (mut technology, mut notation) = (None, None);
                 if *self.peek() == Tok::LBrace {
                     self.block(|p| {
                         if p.is_word("style") && *p.peek_at(1) == Tok::LBrace {
@@ -268,8 +268,10 @@ impl Parser {
                             p.next();
                             p.eat(&Tok::Colon);
                             let value = p.string("a string")?;
-                            if key == "technology" {
-                                technology = Some(value);
+                            match key.as_str() {
+                                "technology" => technology = Some(value),
+                                "notation" => notation = Some(value),
+                                _ => {}
                             }
                             return Ok(());
                         }
@@ -279,9 +281,9 @@ impl Parser {
                     })?;
                 }
                 self.out.specs.push(if word == "element" {
-                    SpecItem::Element { name, span, style, technology }
+                    SpecItem::Element { name, span, style, technology, notation }
                 } else {
-                    SpecItem::Relationship { name, span, style, technology }
+                    SpecItem::Relationship { name, span, style, technology, notation }
                 });
                 Ok(())
             }
@@ -451,6 +453,7 @@ impl Parser {
                     "description" => el.description = Some(value),
                     "summary" => el.summary = Some(value),
                     "technology" => el.technology = Some(value),
+                    "notation" => el.notation = Some(value),
                     _ => {}
                 }
                 return Ok(());
@@ -523,6 +526,7 @@ impl Parser {
             tags: Vec::new(),
             style: StyleProps::default(),
             metadata: Vec::new(),
+            notation: None,
         };
         rel.title = self.opt_string();
         if rel.title.is_some() {
@@ -569,6 +573,7 @@ impl Parser {
                             "title" => rel.title = Some(value),
                             "description" => rel.description = Some(value),
                             "technology" => rel.technology = Some(value),
+                            "notation" => rel.notation = Some(value),
                             _ => {}
                         }
                         Ok(())

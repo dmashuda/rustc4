@@ -18,6 +18,7 @@
 //! | `edge.<source>-><target>#<step>` | selects a step of a dynamic view |
 //! | `canvas` | selects nothing |
 //! | `back` | returns to the view before this one |
+//! | `legend` | takes the legend under the diagram away, or brings it back |
 //! | `details.close` | closes the panel |
 //! | `file.<n>` | shows that source file in the editor |
 //! | `file.add` | adds an empty source file and shows it |
@@ -151,6 +152,9 @@ pub struct Screen {
     pub views: Vec<Item>,
     /// To the view before this one; `None` when there is none.
     pub back: Option<Item>,
+    /// Shows or hides the legend; `selected` while it shows. `None` when
+    /// the view has nothing a legend would explain.
+    pub legend: Option<Item>,
     /// The diagram to draw, also available as [`C4Ui::diagram`] and left out
     /// of the JSON (the web draws the SVG instead).
     #[serde(skip)]
@@ -196,6 +200,9 @@ pub struct C4Ui {
     selected: String,
     file: usize,
     diagram: Option<Diagram>,
+    /// Whether the legend is wanted, and whether this view would have one.
+    legend: bool,
+    has_legend: bool,
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -215,6 +222,8 @@ impl C4Ui {
             selected: String::new(),
             file: 0,
             diagram: None,
+            legend: true,
+            has_legend: false,
         };
         ui.reload();
         ui
@@ -240,7 +249,10 @@ impl C4Ui {
 
     fn layout(&mut self) {
         let model = &self.workspace.model;
-        self.diagram = model.compute_view(&self.view).map(|view| c4_layout::layout(&view, &model.colors));
+        let view = model.compute_view(&self.view);
+        self.has_legend = view.as_ref().is_some_and(c4_layout::has_legend);
+        let options = c4_layout::Options { legend: self.legend };
+        self.diagram = view.map(|view| c4_layout::layout_with(&view, &model.colors, options));
     }
 
     fn drop_stale_selection(&mut self) {
@@ -286,7 +298,8 @@ impl C4Ui {
     /// Any view's diagram, for exporting more than the one showing.
     pub fn diagram_of(&self, view: &str) -> Option<Diagram> {
         let model = &self.workspace.model;
-        model.compute_view(view).map(|v| c4_layout::layout(&v, &model.colors))
+        let options = c4_layout::Options { legend: self.legend };
+        model.compute_view(view).map(|v| c4_layout::layout_with(&v, &model.colors, options))
     }
 
     /// The sources as they stand, edits and all: for a front end that keeps
@@ -325,6 +338,10 @@ impl C4Ui {
                 }
             }
             Some(("details", "close")) => self.selected.clear(),
+            None if id == "legend" => {
+                self.legend = !self.legend;
+                self.layout();
+            }
             Some(("file", "add")) if self.editable => {
                 let taken = |name: &str| self.sources.iter().any(|s| s.name == name);
                 let name = (self.sources.len() + 1..).map(|n| format!("file-{n}.c4")).find(|n| !taken(n));
@@ -460,6 +477,15 @@ impl C4Ui {
             views_title: "Views".into(),
             views,
             back,
+            legend: self.has_legend.then(|| {
+                let mut item = Item::new("legend", "Legend").hint(if self.legend {
+                    "Hide what the shapes and lines mean"
+                } else {
+                    "Show what the shapes and lines mean"
+                });
+                item.selected = self.legend;
+                item
+            }),
             diagram: self.diagram.clone(),
             empty,
             selected: self.selected.clone(),
@@ -717,6 +743,39 @@ mod tests {
 
     fn shop(editable: bool) -> C4Ui {
         C4Ui::new(vec![Source { name: "shop.c4".into(), text: SHOP.into() }], editable)
+    }
+
+    #[test]
+    fn the_legend_shows_and_hides_where_there_is_one() {
+        // The shop's specification gives no kind a notation.
+        let ui = shop(false);
+        let screen = ui.screen();
+        assert!(screen.legend.is_none() && screen.diagram.unwrap().legend.is_none());
+
+        let source = "specification { element box { notation 'A box' }; element plain }
+            model { a = box; b = plain }
+            views { view index { include * }; view bare { include b } }";
+        let mut ui = C4Ui::new(vec![Source { name: "m.c4".into(), text: source.into() }], false);
+        let screen = ui.screen();
+        let button = screen.legend.unwrap();
+        // It starts showing.
+        assert_eq!((button.id.as_str(), button.text.as_str(), button.selected), ("legend", "Legend", true));
+        assert_eq!(button.hint, "Hide what the shapes and lines mean");
+        assert_eq!(screen.diagram.unwrap().legend.unwrap().nodes.len(), 1);
+
+        let screen = ui.tap("legend");
+        let button = screen.legend.unwrap();
+        assert!(!button.selected);
+        assert_eq!(button.hint, "Show what the shapes and lines mean");
+        assert!(screen.diagram.unwrap().legend.is_none());
+        // What is exported is what shows.
+        assert!(ui.diagram_of("index").unwrap().legend.is_none());
+
+        // A view with nothing to explain has no legend and no button.
+        ui.tap("legend");
+        let screen = ui.tap("view.bare");
+        assert!(screen.legend.is_none() && screen.diagram.unwrap().legend.is_none());
+        assert!(ui.tap("back").diagram.unwrap().legend.is_some());
     }
 
     fn texts(items: &[Item]) -> Vec<&str> {
@@ -999,6 +1058,7 @@ mod tests {
                 "editor",
                 "empty",
                 "exports",
+                "legend",
                 "problems",
                 "problemsTitle",
                 "related",

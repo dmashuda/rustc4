@@ -48,6 +48,8 @@ pub enum TextRole {
     Description,
     GroupTitle,
     EdgeLabel,
+    /// In the legend: its title, and what each sample means.
+    Legend,
 }
 
 /// One line of text. `y` is its baseline; `x` its start or its middle,
@@ -151,6 +153,27 @@ pub struct Lifeline {
     pub line: LineStyle,
 }
 
+/// What the looks in the diagram mean: a sample of each, with the words
+/// its kind's `notation` gives it. Inside the diagram's own width and
+/// height, below everything else.
+///
+/// Draw the frame's outline (no fill), then the samples exactly as any
+/// node or edge is drawn, then the text. A sample is not something to tap,
+/// select or fade: its id is empty.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Legend {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// The frame's outline.
+    pub stroke: String,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    /// The title, then what each sample means.
+    pub labels: Vec<Label>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagram {
@@ -166,4 +189,6 @@ pub struct Diagram {
     pub edges: Vec<Edge>,
     /// Empty unless this is a sequence.
     pub lifelines: Vec<Lifeline>,
+    /// There when it was asked for and the view has something to explain.
+    pub legend: Option<Legend>,
 }

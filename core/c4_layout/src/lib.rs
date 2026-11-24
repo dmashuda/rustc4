@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use c4_model::{Arrow, ComputedView, Direction, IconPosition, Line, Size, ViewNode};
 
 pub use diagram::{
-    Anchor, Diagram, Edge, Icon, Label, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
+    Anchor, Diagram, Edge, Icon, Label, Legend, Lifeline, LineStyle, Marker, Node, Point, Shape, TextRole,
 };
 pub use text::FONT_FAMILY;
 
@@ -195,8 +195,32 @@ fn size(node: &ViewNode) -> Sized {
     }
 }
 
+/// What to draw besides the view itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// A legend under the diagram: a sample of each look whose kind has a
+    /// `notation`, with what it says. None, if nothing shown has one.
+    pub legend: bool,
+}
+
+/// With a legend: a diagram explains itself unless told not to.
+impl Default for Options {
+    fn default() -> Self {
+        Options { legend: true }
+    }
+}
+
+/// Whether a legend of this view would have anything in it.
+pub fn has_legend(view: &ComputedView) -> bool {
+    view.nodes.iter().any(|n| !n.notation.is_empty()) || view.edges.iter().any(|e| !e.notation.is_empty())
+}
+
 /// Lays out a view. `colors` are the model's own (`Model::colors`).
 pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram {
+    layout_with(view, colors, Options::default())
+}
+
+pub fn layout_with(view: &ComputedView, colors: &BTreeMap<String, String>, options: Options) -> Diagram {
     // A sequence has only who takes part, side by side in the order they
     // come into it: no groups, and nobody who only stands by.
     let participants;
@@ -514,17 +538,173 @@ pub fn layout(view: &ComputedView, colors: &BTreeMap<String, String>) -> Diagram
         });
     }
 
+    let (mut width, mut height) = (placed.width.ceil(), placed.height.ceil());
+    let legend = if options.legend { legend(view, colors, width, height) } else { None };
+    if let Some(legend) = &legend {
+        width = width.max(legend.x + legend.width + LEGEND_MARGIN);
+        height = legend.y + legend.height + LEGEND_MARGIN;
+    }
     Diagram {
         id: view.id.clone(),
         title: view.title.clone(),
         description: view.description.clone(),
-        width: placed.width.ceil(),
-        height: placed.height.ceil(),
+        width,
+        height,
         font_family: FONT_FAMILY.to_string(),
         nodes,
         edges,
         lifelines,
+        legend,
     }
+}
+
+/// From the edge of the drawing to the legend's frame.
+const LEGEND_MARGIN: f64 = 24.0;
+/// Inside the frame.
+const LEGEND_PAD: f64 = 14.0;
+const LEGEND_TITLE: f64 = 26.0;
+/// A sample: big enough for every shape to be itself.
+const SAMPLE_W: f64 = 76.0;
+const SAMPLE_H: f64 = 56.0;
+const SAMPLE_GAP: f64 = 10.0;
+const LEGEND_TEXT_MAX: f64 = 170.0;
+const LEGEND_TEXT_SIZE: f64 = 12.5;
+const LEGEND_TEXT_LINE: f64 = 16.5;
+/// Between one entry and the next, across and down.
+const ENTRY_GAP_X: f64 = 24.0;
+const ENTRY_GAP_Y: f64 = 12.0;
+
+/// The legend for a view, under a drawing of this size: one entry for each
+/// different look that has a `notation`, boxes first, in the order they
+/// first appear. As many to a row as fit under the drawing.
+fn legend(view: &ComputedView, colors: &BTreeMap<String, String>, width: f64, height: f64) -> Option<Legend> {
+    enum Sample<'a> {
+        Node(&'a ViewNode),
+        Edge(&'a c4_model::ViewEdge),
+    }
+    let mut entries: Vec<(Sample, &str)> = Vec::new();
+    for node in view.nodes.iter().filter(|n| !n.notation.is_empty()) {
+        let same = |other: &ViewNode| {
+            (&other.notation, other.shape, &other.color, other.border)
+                == (&node.notation, node.shape, &node.color, node.border)
+        };
+        if !entries.iter().any(|(s, _)| matches!(s, Sample::Node(other) if same(other))) {
+            entries.push((Sample::Node(node), &node.notation));
+        }
+    }
+    for edge in view.edges.iter().filter(|e| !e.notation.is_empty()) {
+        let same = |other: &c4_model::ViewEdge| {
+            (&other.notation, &other.color, other.line, other.head, other.tail)
+                == (&edge.notation, &edge.color, edge.line, edge.head, edge.tail)
+        };
+        if !entries.iter().any(|(s, _)| matches!(s, Sample::Edge(other) if same(other))) {
+            entries.push((Sample::Edge(edge), &edge.notation));
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+
+    let words: Vec<Vec<String>> = entries
+        .iter()
+        .map(|(_, notation)| {
+            text::clamp_lines(text::wrap(notation, LEGEND_TEXT_MAX, LEGEND_TEXT_SIZE, false), 3)
+        })
+        .collect();
+    let text_w = words
+        .iter()
+        .flatten()
+        .map(|line| text::width(line, LEGEND_TEXT_SIZE, false))
+        .fold(0.0, f64::max)
+        .ceil();
+    let cell_w = SAMPLE_W + SAMPLE_GAP + text_w;
+    let room = width - 2.0 * LEGEND_MARGIN - 2.0 * LEGEND_PAD;
+    let columns = (((room + ENTRY_GAP_X) / (cell_w + ENTRY_GAP_X)).floor() as usize).clamp(1, entries.len());
+    let rows = entries.len().div_ceil(columns);
+    let (x, y) = (LEGEND_MARGIN, height);
+    let legend_w = 2.0 * LEGEND_PAD + columns as f64 * cell_w + (columns - 1) as f64 * ENTRY_GAP_X;
+    let legend_h =
+        LEGEND_PAD + LEGEND_TITLE + rows as f64 * SAMPLE_H + (rows - 1) as f64 * ENTRY_GAP_Y + LEGEND_PAD;
+
+    let label = |x: f64, y: f64, text: &str, size: f64, bold: bool| Label {
+        x: round(x),
+        y: round(y),
+        text: text.to_string(),
+        size,
+        bold,
+        color: theme::LABEL_GRAY.to_string(),
+        anchor: Anchor::Start,
+        role: TextRole::Legend,
+    };
+    let mut labels = vec![label(x + LEGEND_PAD, y + LEGEND_PAD + 11.0, "Legend", GROUP_TITLE_SIZE, true)];
+    let (mut nodes, mut edges) = (Vec::new(), Vec::new());
+    for (i, ((sample, notation), lines)) in entries.iter().zip(&words).enumerate() {
+        let left = x + LEGEND_PAD + (i % columns) as f64 * (cell_w + ENTRY_GAP_X);
+        let top = y + LEGEND_PAD + LEGEND_TITLE + (i / columns) as f64 * (SAMPLE_H + ENTRY_GAP_Y);
+        match sample {
+            Sample::Node(node) => {
+                let swatch = theme::element(&node.color, colors);
+                nodes.push(Node {
+                    id: String::new(),
+                    parent: None,
+                    kind: node.kind.clone(),
+                    title: notation.to_string(),
+                    shape: shape_of(node.shape),
+                    group: false,
+                    depth: 0,
+                    x: round(left),
+                    y: round(top),
+                    width: SAMPLE_W,
+                    height: SAMPLE_H,
+                    fill: swatch.fill,
+                    stroke: swatch.stroke,
+                    fill_opacity: 1.0,
+                    border: line_of(node.border),
+                    behind: Vec::new(),
+                    icon: None,
+                    labels: Vec::new(),
+                    navigate_to: None,
+                });
+            }
+            Sample::Edge(edge) => {
+                let middle = top + SAMPLE_H / 2.0;
+                let mut points = vec![(left + SAMPLE_W, middle), (left, middle)];
+                let mut markers = Vec::new();
+                markers.extend(end_mark(&mut points, edge.tail));
+                points.reverse();
+                markers.extend(end_mark(&mut points, edge.head));
+                edges.push(Edge {
+                    id: String::new(),
+                    source: String::new(),
+                    target: String::new(),
+                    path: smooth(&points),
+                    color: theme::line(&edge.color, colors),
+                    line: line_of(edge.line),
+                    markers,
+                    labels: Vec::new(),
+                    title: notation.to_string(),
+                });
+            }
+        }
+        let mut baseline = top
+            + (SAMPLE_H - lines.len() as f64 * LEGEND_TEXT_LINE) / 2.0
+            + LEGEND_TEXT_LINE / 2.0
+            + LEGEND_TEXT_SIZE * 0.35;
+        for line in lines {
+            labels.push(label(left + SAMPLE_W + SAMPLE_GAP, baseline, line, LEGEND_TEXT_SIZE, false));
+            baseline += LEGEND_TEXT_LINE;
+        }
+    }
+    Some(Legend {
+        x,
+        y,
+        width: legend_w,
+        height: legend_h,
+        stroke: theme::LINE_GRAY.to_string(),
+        nodes,
+        edges,
+        labels,
+    })
 }
 
 /// Two decimals: plenty for a pixel, and short in SVG and JSON.
@@ -983,5 +1163,115 @@ mod tests {
         let (a, b, c) = (node("a"), node("b"), node("c"));
         assert_eq!(b.x - (a.x + a.width), 200.0);
         assert_eq!(c.y - (b.y + b.height), 10.0);
+    }
+
+    const NOTED: &str = "specification {
+                element person { notation 'Someone' style { shape person; color green } }
+                element service { notation 'A service we run, day and night, whatever happens' }
+                element store { notation 'Data' style { shape storage } }
+                element plain
+                relationship async { notation 'Does not wait' line dotted; head open }
+                relationship sync
+            }
+            model {
+                user = person 'User'
+                api = service 'API'
+                jobs = service 'Jobs'
+                odd = service 'Odd' { notation 'An odd one' }
+                db = store 'DB'
+                other = plain 'Other'
+                user -> api
+                api -[async]-> jobs
+                api -[async]-> odd
+                api -[sync]-> db
+                jobs -> other
+            }
+            views {
+                view index { include * }
+                view quiet { include other, db with { notation '' } }
+                view marked { include api, jobs with { notation 'Marked'; color red } }
+            }";
+
+    fn noted(view: &str, legend: bool) -> Diagram {
+        let ws = load(&[Source { name: "t.c4".into(), text: NOTED.into() }]);
+        assert!(ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        let view = ws.model.compute_view(view).unwrap();
+        assert_eq!(has_legend(&view), view.id != "quiet");
+        layout_with(&view, &ws.model.colors, Options { legend })
+    }
+
+    #[test]
+    fn a_legend_has_one_entry_for_each_look_with_a_notation() {
+        let without = noted("index", false);
+        assert!(without.legend.is_none());
+        let with = noted("index", true);
+        // There unless it is turned off.
+        let ws = load(&[Source { name: "t.c4".into(), text: NOTED.into() }]);
+        assert_eq!(layout(&ws.model.compute_view("index").unwrap(), &ws.model.colors), with);
+        let legend = with.legend.as_ref().unwrap();
+        // The drawing itself is where it was, the legend under it.
+        assert_eq!((&with.nodes, &with.edges), (&without.nodes, &without.edges));
+        assert_eq!(legend.y, without.height);
+        assert!(with.height > without.height && with.width >= without.width);
+        assert!(legend.x >= 0.0 && legend.x + legend.width <= with.width);
+        assert!(legend.y + legend.height <= with.height);
+
+        // Two services look the same and say the same: one entry. `plain`
+        // and `sync` say nothing: none.
+        let said: Vec<&str> = legend.nodes.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(
+            said,
+            ["Someone", "A service we run, day and night, whatever happens", "An odd one", "Data"]
+        );
+        assert_eq!(legend.nodes[0].shape, Shape::Person);
+        assert_eq!(legend.nodes[3].shape, Shape::Storage);
+        let lines: Vec<&str> = legend.edges.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(lines, ["Does not wait"]);
+        assert_eq!((legend.edges[0].line, legend.edges[0].markers.len()), (LineStyle::Dotted, 1));
+
+        // A sample is nothing to tap, and says nothing itself.
+        assert!(legend.nodes.iter().all(|n| n.id.is_empty() && n.labels.is_empty()));
+        assert_eq!(legend.labels[0].text, "Legend");
+        // A long notation breaks; every line stays inside the frame.
+        let texts: Vec<&str> = legend.labels.iter().map(|l| l.text.as_str()).collect();
+        assert!(texts.contains(&"A service we run, day and"), "{texts:?}");
+        for label in &legend.labels {
+            assert_eq!(label.role, TextRole::Legend);
+            let right = label.x + text::width(&label.text, label.size, label.bold);
+            assert!(label.x >= legend.x && right <= legend.x + legend.width, "{}", label.text);
+            assert!(label.y > legend.y && label.y < legend.y + legend.height, "{}", label.text);
+        }
+        // No two samples share a place.
+        let places: Vec<(f64, f64)> = legend
+            .nodes
+            .iter()
+            .map(|n| (n.x, n.y))
+            .chain(legend.edges.iter().map(|e| (e.path.last().unwrap().x.floor(), e.path[0].y)))
+            .collect();
+        for (i, a) in places.iter().enumerate() {
+            assert!(places[i + 1..].iter().all(|b| (a.0 - b.0).abs() > 50.0 || (a.1 - b.1).abs() > 20.0));
+        }
+    }
+
+    #[test]
+    fn a_legend_follows_what_the_view_shows() {
+        // Nothing with a notation: no legend, though one was asked for.
+        let quiet = noted("quiet", true);
+        assert!(quiet.legend.is_none());
+        assert_eq!(quiet.height, noted("quiet", false).height);
+        // A look the view gives is a look of its own, with its own words.
+        let marked = noted("marked", true);
+        let legend = marked.legend.unwrap();
+        let looks: Vec<(&str, &str)> =
+            legend.nodes.iter().map(|n| (n.title.as_str(), n.fill.as_str())).collect();
+        assert_eq!(
+            looks,
+            [("A service we run, day and night, whatever happens", "#3b82f6"), ("Marked", "#ac4d39")]
+        );
+        // Narrow drawing, so one under the other; and the drawing is made
+        // wide enough for the legend.
+        assert_eq!(legend.nodes[0].x, legend.nodes[1].x);
+        assert!(legend.nodes[1].y > legend.nodes[0].y);
+        assert!(marked.width >= legend.x + legend.width);
     }
 }

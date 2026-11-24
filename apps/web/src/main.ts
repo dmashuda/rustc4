@@ -34,6 +34,7 @@ type Screen = {
   viewsTitle: string;
   views: Item[];
   back: Item | null;
+  legend: Item | null;
   empty: string;
   selected: string;
   related: string[];
@@ -391,6 +392,7 @@ function draw(screen: Screen) {
   $("views").replaceChildren(...screen.views.map((item) => button(item)));
   $("status").textContent = screen.status;
   $("back").replaceChildren(...(screen.back ? [button(screen.back)] : []));
+  $("legend").replaceChildren(...(screen.legend ? [button(screen.legend)] : []));
   $("exports").replaceChildren(
     ...screen.exports.map((item) => {
       const node = el("button", { type: "button", textContent: item.text, title: item.hint });

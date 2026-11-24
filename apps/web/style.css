@@ -161,6 +161,11 @@ button {
   margin-left: auto;
 }
 
+.tools button[data-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .files button[data-selected="true"] {
   border-color: var(--accent);
   color: var(--accent);

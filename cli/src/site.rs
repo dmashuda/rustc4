@@ -63,8 +63,9 @@ pub fn unbundle(bytes: &[u8]) -> Result<Vec<Source>, String> {
         .collect()
 }
 
-/// Writes the site into `dir`; returns how many files.
-pub fn write(dir: &Path, sources: &[Source], ws: &Workspace) -> Result<usize, String> {
+/// Writes the site into `dir`; returns how many files. `legend`: whether
+/// the SVGs have one (the viewer shows and hides its own).
+pub fn write(dir: &Path, sources: &[Source], ws: &Workspace, legend: bool) -> Result<usize, String> {
     let put = |name: &str, bytes: &[u8]| -> Result<(), String> {
         let path = dir.join(name);
         if let Some(parent) = path.parent() {
@@ -83,7 +84,7 @@ pub fn write(dir: &Path, sources: &[Source], ws: &Workspace) -> Result<usize, St
     count += 1;
     for id in ws.model.view_ids() {
         let view = ws.model.compute_view(id).expect("listed views exist");
-        let diagram = c4_layout::layout(&view, &ws.model.colors);
+        let diagram = c4_layout::layout_with(&view, &ws.model.colors, c4_layout::Options { legend });
         put(&format!("views/{id}.svg"), c4_render::svg(&diagram, &SvgOptions::default()).as_bytes())?;
         count += 1;
     }

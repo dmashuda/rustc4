@@ -75,9 +75,15 @@ One Rust core, thin bindings, renderers that only draw.
   source named. Such a file is one more `Source` (named `.svg`, not read
   as a model); `Workspace::wanted` lists those not given, for whoever
   reads files to read and give. The core never touches the file system.
+- **A legend is part of the `Diagram`** (`Diagram::legend`), under the
+  drawing and inside its width and height, whenever the view shows
+  something whose kind has a `notation`, unless it is turned off
+  (`c4_layout::Options`, `--no-legend`, the `legend` tap). Its samples are ordinary `Node`s
+  and `Edge`s with empty ids, drawn by the same code as the diagram's and
+  never tapped, selected or faded.
 - **Ids are API.** `view.<id>`, `node.<fqn>`, `open.<fqn>`,
   `edge.<source>-><target>` (a step of a dynamic view:
-  `edge.<source>-><target>#<step>`), `back`, `canvas`, `details.close`, `file.<n>`,
+  `edge.<source>-><target>#<step>`), `back`, `legend`, `canvas`, `details.close`, `file.<n>`,
   `file.add`, `file.remove`.
   Tests address things by them.
 - `c4_model` has no dependencies. `c4_layout` adds only serde (the Diagram

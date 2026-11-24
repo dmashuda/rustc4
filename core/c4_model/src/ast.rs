@@ -33,10 +33,27 @@ pub struct StyleProps(pub Vec<(String, String, Span)>);
 
 #[derive(Debug)]
 pub enum SpecItem {
-    Element { name: String, span: Span, style: StyleProps, technology: Option<String> },
-    Relationship { name: String, span: Span, style: StyleProps, technology: Option<String> },
+    Element {
+        name: String,
+        span: Span,
+        style: StyleProps,
+        technology: Option<String>,
+        /// What this kind means, for a legend.
+        notation: Option<String>,
+    },
+    Relationship {
+        name: String,
+        span: Span,
+        style: StyleProps,
+        technology: Option<String>,
+        notation: Option<String>,
+    },
     Tag,
-    Color { name: String, value: String, span: Span },
+    Color {
+        name: String,
+        value: String,
+        span: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -68,6 +85,7 @@ pub struct ElementDef {
     pub description: Option<String>,
     pub summary: Option<String>,
     pub technology: Option<String>,
+    pub notation: Option<String>,
     pub tags: Vec<String>,
     /// (url, title)
     pub links: Vec<(String, Option<String>)>,
@@ -89,6 +107,7 @@ pub struct RelationDef {
     pub tags: Vec<String>,
     pub style: StyleProps,
     pub metadata: Vec<(String, String)>,
+    pub notation: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
