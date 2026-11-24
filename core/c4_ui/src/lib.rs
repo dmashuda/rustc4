@@ -19,6 +19,8 @@
 //! | `back` | returns to the view before this one |
 //! | `details.close` | closes the panel |
 //! | `file.<n>` | shows that source file in the editor |
+//! | `file.add` | adds an empty source file and shows it |
+//! | `file.remove` | removes the source file showing, if it is not the only one |
 
 use c4_layout::Diagram;
 use c4_model::{Severity, Source, Workspace};
@@ -106,8 +108,13 @@ pub struct Editor {
     pub title: String,
     /// One per source file; the selected one is in `text`.
     pub files: Vec<Item>,
+    /// Adds a file: a model may be split over several, a specification in
+    /// one and the model in another, as LikeC4 projects usually are.
+    pub add: Item,
+    /// Removes the file showing; `None` when it is the only one.
+    pub remove: Option<Item>,
     /// The index to pass to [`C4Ui::set_source`].
-    pub file: usize,
+    pub file: u32,
     pub text: String,
 }
 
@@ -169,6 +176,8 @@ pub struct Controls {
     pub zoom_in: String,
     pub zoom_out: String,
     pub fit: String,
+    /// For an app that can read a model from disk.
+    pub open: String,
 }
 
 pub struct C4Ui {
@@ -274,6 +283,12 @@ impl C4Ui {
         model.compute_view(view).map(|v| c4_layout::layout(&v, &model.colors))
     }
 
+    /// The sources as they stand, edits and all: for a front end that keeps
+    /// them between visits.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
     pub fn view_ids(&self) -> Vec<String> {
         self.workspace.model.views.iter().map(|v| v.id.clone()).collect()
     }
@@ -304,6 +319,18 @@ impl C4Ui {
                 }
             }
             Some(("details", "close")) => self.selected.clear(),
+            Some(("file", "add")) if self.editable => {
+                let taken = |name: &str| self.sources.iter().any(|s| s.name == name);
+                let name = (self.sources.len() + 1..).map(|n| format!("file-{n}.c4")).find(|n| !taken(n));
+                self.sources.push(Source { name: name.expect("a name not taken"), text: String::new() });
+                self.file = self.sources.len() - 1;
+                self.reload();
+            }
+            Some(("file", "remove")) if self.editable && self.sources.len() > 1 => {
+                self.sources.remove(self.file);
+                self.file = self.file.min(self.sources.len() - 1);
+                self.reload();
+            }
             Some(("file", n)) => {
                 if let Some(n) = n.parse::<usize>().ok().filter(|&n| n < self.sources.len()) {
                     self.file = n;
@@ -328,6 +355,22 @@ impl C4Ui {
             && source.text != text
         {
             source.text = text.to_string();
+            self.reload();
+        }
+        self.screen()
+    }
+
+    /// Other sources altogether: another model was opened, or the files of
+    /// this one changed on disk. As with an edit, what was showing stays if
+    /// it still exists.
+    pub fn set_sources(&mut self, sources: Vec<Source>, editable: bool) -> Screen {
+        let same = self.editable == editable
+            && self.sources.len() == sources.len()
+            && self.sources.iter().zip(&sources).all(|(a, b)| a.name == b.name && a.text == b.text);
+        if !same {
+            self.sources = sources;
+            self.editable = editable;
+            self.file = self.file.min(self.sources.len().saturating_sub(1));
             self.reload();
         }
         self.screen()
@@ -396,7 +439,12 @@ impl C4Ui {
                     item
                 })
                 .collect(),
-            file: self.file,
+            add: Item::new("file.add", "+").hint("Add a source file"),
+            remove: (self.sources.len() > 1).then(|| {
+                let name = self.sources.get(self.file).map(|s| s.name.as_str()).unwrap_or_default();
+                Item::new("file.remove", "Remove").hint(format!("Remove {name}"))
+            }),
+            file: self.file as u32,
             text: self.sources.get(self.file).map(|s| s.text.clone()).unwrap_or_default(),
         });
         Screen {
@@ -434,6 +482,7 @@ impl C4Ui {
                 zoom_in: "Zoom in".into(),
                 zoom_out: "Zoom out".into(),
                 fit: "Fit to window".into(),
+                open: "Open…".into(),
             },
         }
     }
@@ -740,6 +789,67 @@ mod tests {
         // And back.
         assert_eq!(ui.set_source(0, SHOP).view, "index");
         assert_eq!(ui.set_source(7, "ignored").view, "index");
+    }
+
+    #[test]
+    fn a_model_can_be_split_over_files() {
+        // A model with no specification: every kind is unknown.
+        let model = "model { a = box 'A'; b = box 'B'; a -> b }";
+        let mut ui = C4Ui::new(vec![Source { name: "model.c4".into(), text: model.into() }], true);
+        let screen = ui.screen();
+        assert_eq!(screen.problems.len(), 2);
+        let editor = screen.editor.unwrap();
+        assert_eq!((editor.add.id.as_str(), editor.remove), ("file.add", None));
+
+        // The specification goes in a second file, as in a LikeC4 project.
+        let editor = ui.tap("file.add").editor.unwrap();
+        assert_eq!(texts(&editor.files), ["model.c4", "file-2.c4"]);
+        assert_eq!((editor.file, editor.text.as_str()), (1, ""));
+        assert_eq!(editor.remove.unwrap().hint, "Remove file-2.c4");
+        let screen = ui.set_source(1, "specification { element box }");
+        assert!(screen.problems.is_empty());
+        assert_eq!(screen.status, "2 elements · 1 relationship · 1 view");
+        assert_eq!(ui.sources()[1].text, "specification { element box }");
+
+        // Back to the first file, and the second can go again.
+        assert_eq!(ui.tap("file.0").editor.unwrap().text, model);
+        ui.tap("file.1");
+        let screen = ui.tap("file.remove");
+        assert_eq!(screen.problems.len(), 2);
+        let editor = screen.editor.unwrap();
+        assert_eq!((editor.file, texts(&editor.files)), (0, vec!["model.c4"]));
+        // The only file stays, and a model that is only shown cannot be added to.
+        assert_eq!(ui.tap("file.remove").editor.unwrap().files.len(), 1);
+        let mut shown = shop(false);
+        shown.tap("file.add");
+        assert_eq!(shown.sources().len(), 1);
+    }
+
+    #[test]
+    fn opening_another_model_replaces_this_one() {
+        let mut ui = shop(true);
+        ui.tap("view.shop");
+        let other = Source {
+            name: "other.c4".into(),
+            text: "specification { element box } model { a = box 'A' }".into(),
+        };
+        let screen = ui.set_sources(vec![other.clone()], false);
+        assert_eq!(
+            (screen.view.as_str(), screen.status.as_str()),
+            ("index", "1 element · 0 relationships · 1 view")
+        );
+        assert!(screen.editor.is_none() && screen.back.is_none());
+        assert_eq!(screen.controls.open, "Open…");
+        // The same again changes nothing, selection included.
+        ui.tap("node.a");
+        assert_eq!(ui.set_sources(vec![other], false).selected, "node.a");
+        // The files changed on disk: what is showing stays.
+        ui.set_sources(vec![Source { name: "shop.c4".into(), text: SHOP.into() }], false);
+        ui.tap("view.api");
+        let edited = SHOP.replace("'Catalogue'", "'Products'");
+        let screen = ui.set_sources(vec![Source { name: "shop.c4".into(), text: edited }], false);
+        assert_eq!(screen.view, "api");
+        assert!(screen.diagram.unwrap().nodes.iter().any(|n| n.title == "Products"));
     }
 
     #[test]

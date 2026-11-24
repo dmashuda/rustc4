@@ -1,0 +1,21 @@
+load("@rules_apple//apple:macos.bzl", "macos_application")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+load("//tools/apple:defs.bzl", "APPLE_TARGET_COMPATIBLE_WITH")
+
+swift_library(
+    name = "C4AppLib",
+    srcs = ["C4App.swift"],
+    target_compatible_with = APPLE_TARGET_COMPATIBLE_WITH,
+    deps = ["//apps/apple/C4UI"],
+)
+
+# `bazel run //apps/macos:rustc4` builds the .app and launches it.
+macos_application(
+    name = "rustc4",
+    bundle_id = "dev.mashuda.rustc4",
+    bundle_name = "rustc4",
+    infoplists = ["Info.plist"],
+    minimum_os_version = "14.0",
+    target_compatible_with = APPLE_TARGET_COMPATIBLE_WITH,
+    deps = [":C4AppLib"],
+)

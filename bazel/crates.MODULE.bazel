@@ -4,6 +4,10 @@ Two repos, so the wasm-bindgen CLI's dependencies never get feature-unified
 into what ships inside the apps.
 """
 
+# UniFFI's runtime and bindgen must be the *same* version: the bindgen reads
+# metadata the runtime macros embed in the compiled library.
+UNIFFI_VERSION = "=0.32.2"
+
 # Must match the CLI built in //tools/wasm_bindgen.
 WASM_BINDGEN_VERSION = "=0.2.129"
 
@@ -17,6 +21,13 @@ CRATE_TRIPLES = [
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
+# Linked into the native apps (//bindings/uniffi).
+crate.spec(
+    default_features = False,
+    package = "uniffi",
+    repositories = ["crates"],
+    version = UNIFFI_VERSION,
+)
 crate.spec(
     package = "wasm-bindgen",
     repositories = ["crates"],
@@ -49,6 +60,15 @@ crate.from_specs(
 )
 
 # Build-time tools (run on the exec platform only).
+# default_features = False drops `cargo-metadata`, so the bindgen never tries
+# to shell out to `cargo metadata` (impossible inside a Bazel sandbox).
+crate.spec(
+    default_features = False,
+    features = ["cli"],
+    package = "uniffi",
+    repositories = ["tool_crates"],
+    version = UNIFFI_VERSION,
+)
 # default_features = False drops rustls, whose `ring` dependency does not
 # build under crate_universe. The CLI only needs TLS to download webdrivers.
 crate.spec(

@@ -49,6 +49,15 @@ assert.equal(screen.problems.length, 1);
 assert.equal(screen.problems[0].text, "There is no element 'shop.webb'.");
 assert.ok(ui.svg(undefined).startsWith("<svg"), "what could be understood is still drawn");
 
+// Files can be added, and the sources come back out to be kept.
+screen = JSON.parse(ui.tap("file.add"));
+assert.deepEqual(screen.editor.files.map((f) => f.text), ["shop.c4", "file-2.c4"]);
+assert.equal(screen.editor.file, 1);
+ui.setSource(1, "// more");
+assert.deepEqual(JSON.parse(ui.sources()).map((s) => s.name), ["shop.c4", "file-2.c4"]);
+assert.equal(JSON.parse(ui.sources())[1].text, "// more");
+assert.equal(JSON.parse(ui.tap("file.remove")).editor.files.length, 1);
+
 // Sources that are not JSON are no sources.
 const empty = new C4Ui("not json", false);
 screen = JSON.parse(empty.screen());

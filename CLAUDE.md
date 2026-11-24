@@ -13,6 +13,7 @@ bazel run @rules_rust//tools/rustfmt   # format Rust
 bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
     --output_groups=clippy_checks //core/... //bindings/... //cli/...
 bazel run //apps/web:serve             # the playground on :8080
+bazel run //apps/macos:rustc4          # the macOS app
 bazel run //cli -- export png examples -o /tmp/out --background '#fff'
 ```
 
@@ -63,9 +64,20 @@ thin bindings, renderers that only draw.
 - **Errors never stop the drawing.** The parser recovers at the next line,
   the model leaves out what it could not resolve, and whatever is left is
   drawn. Every diagnostic has a file, line and column and says what to do.
-- A new field on `Screen` or `Diagram` touches: the Rust struct, the type in
-  `apps/web/src/main.ts`, and (for `Diagram`) `core/c4_render`. The web gets
-  the screen as JSON, so `bindings/wasm` does not change.
+- A new field on `Screen` or `Diagram` touches: the Rust struct, the remote
+  declaration in `bindings/uniffi/src/lib.rs` (the compiler catches a
+  mismatch), the type in `apps/web/src/main.ts`, and for `Diagram` both
+  drawings of it: `core/c4_render` (SVG) and
+  `apps/apple/C4UI/Sources/DiagramDrawing.swift`. Those two must stay shape
+  for shape the same. The web gets the screen as JSON, so `bindings/wasm`
+  does not change. UniFFI has no `usize`: use `u32`.
+- Several of the bindings' names are also SwiftUI's (`Label`, `Edge`,
+  `Section`, `Link`, `Shape`, `Anchor`): in Swift write `C4FFI.Label` or
+  `SwiftUI.Label`.
+- Apple tests (`//bindings/uniffi:C4FFITests`, `//apps/apple/C4UI:C4UITests`)
+  only run on a Mac; CI is Linux and skips them. `C4UITests` leaves a picture
+  of the window in `bazel-testlogs/apps/apple/C4UI/C4UITests/test.outputs/`:
+  look at it after changing the Swift views.
 - The CLI embeds `//apps/web:viewer` (`cli/BUILD.bazel`); `rustc4 build`
   writes it beside `model.json`. The viewer decides between showing a
   published model and being the playground by whether `model.json` is there.

@@ -267,8 +267,13 @@ mod tests {
     #[test]
     fn checks_and_lists() {
         assert_eq!(
-            rustc4(&["check", "examples"]),
+            rustc4(&["check", "examples/shop.c4"]),
             (0, "ok: 14 elements, 15 relationships, 4 views\n".into(), String::new())
+        );
+        // The other example: LikeC4's own "Big Bank", as LikeC4 writes it.
+        assert_eq!(
+            rustc4(&["check", "examples/bigbank.c4"]).1,
+            "ok: 19 elements, 26 relationships, 9 views\n"
         );
         let (code, out, _) = rustc4(&["views", "examples/shop.c4"]);
         assert_eq!(code, 0);
@@ -291,13 +296,13 @@ mod tests {
     fn exports_every_view_in_each_format() {
         let dir = scratch("export");
         let out_dir = dir.to_str().unwrap();
-        let (code, out, err) = rustc4(&["export", "svg", "examples", "-o", out_dir]);
+        let (code, out, err) = rustc4(&["export", "svg", "examples/shop.c4", "-o", out_dir]);
         assert_eq!((code, err.as_str()), (0, ""));
         assert_eq!(out.lines().count(), 4);
         let svg = std::fs::read_to_string(dir.join("shop.svg")).unwrap();
         assert!(svg.starts_with("<svg ") && svg.contains("Storefront"));
 
-        let (code, _, _) = rustc4(&["export", "json", "examples", "-o", out_dir, "--view", "api"]);
+        let (code, _, _) = rustc4(&["export", "json", "examples/shop.c4", "-o", out_dir, "--view", "api"]);
         assert_eq!(code, 0);
         let json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("api.json")).unwrap()).unwrap();
@@ -306,7 +311,7 @@ mod tests {
         assert!(!dir.join("shop.json").exists(), "only the view asked for");
 
         let (code, _, err) =
-            rustc4(&["export", "png", "examples", "-o", out_dir, "--view", "index", "--scale", "1"]);
+            rustc4(&["export", "png", "examples/shop.c4", "-o", out_dir, "--view", "index", "--scale", "1"]);
         assert_eq!((code, err.as_str()), (0, ""));
         let png = std::fs::read(dir.join("index.png")).unwrap();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -315,7 +320,7 @@ mod tests {
     #[test]
     fn builds_a_site() {
         let dir = scratch("site");
-        let (code, out, err) = rustc4(&["build", "examples", "-o", dir.to_str().unwrap()]);
+        let (code, out, err) = rustc4(&["build", "examples/shop.c4", "-o", dir.to_str().unwrap()]);
         assert_eq!((code, err.as_str()), (0, ""));
         assert!(out.ends_with(": 9 files, 4 views\n"), "{out}");
         for file in [
@@ -340,11 +345,11 @@ mod tests {
     fn says_what_is_wrong_with_the_command() {
         assert_eq!(rustc4(&[]).0, 2);
         assert_eq!(rustc4(&["--help"]).0, 0);
-        let (code, _, err) = rustc4(&["export", "gif", "examples"]);
+        let (code, _, err) = rustc4(&["export", "gif", "examples/shop.c4"]);
         assert_eq!((code, err.as_str()), (2, "rustc4: export what? 'svg', 'png' or 'json', not 'gif'\n"));
         assert_eq!(rustc4(&["check"]).2, "rustc4: give at least one file or directory\n");
         assert!(rustc4(&["check", "nowhere"]).2.starts_with("rustc4: nowhere: "));
-        let (code, _, err) = rustc4(&["export", "svg", "examples", "--view", "nope"]);
+        let (code, _, err) = rustc4(&["export", "svg", "examples/shop.c4", "--view", "nope"]);
         assert_eq!(code, 2);
         assert_eq!(err, "rustc4: there is no view 'nope' (there are: index, shop, api, orders)\n");
         assert_eq!(rustc4(&["frobnicate"]).2, "rustc4: unknown command 'frobnicate' (try --help)\n");

@@ -1,0 +1,90 @@
+load("@rules_apple//apple:macos.bzl", "macos_unit_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_swift//swift:swift.bzl", "swift_interop_hint", "swift_library")
+load("//tools/apple:defs.bzl", "APPLE_TARGET_COMPATIBLE_WITH")
+
+rust_library(
+    name = "c4_ffi",
+    srcs = ["src/lib.rs"],
+    # The stub manifest UniFFI's proc-macros read (see the comment inside
+    # it), and the example a new window opens on.
+    compile_data = [
+        "Cargo.toml",
+        "//examples:shop.c4",
+    ],
+    deps = [
+        "//core/c4_layout",
+        "//core/c4_model",
+        "//core/c4_render",
+        "//core/c4_ui",
+        "@crates//:uniffi",
+    ],
+)
+
+# Run uniffi-bindgen-swift in library mode against the compiled rlib.
+# The rlib is listed in `tools`, so it is built for the *exec* platform: the
+# generated Swift/C is platform-independent, so one generation serves macOS
+# and, later, iOS builds alike.
+genrule(
+    name = "c4_ffi_swift_gen",
+    outs = [
+        "c4_ffi.swift",
+        "c4_ffiFFI.h",
+    ],
+    cmd = """
+        $(execpath //tools/uniffi:uniffi_bindgen_swift) \
+            --swift-sources --headers \
+            $(execpath :c4_ffi) $(RULEDIR)
+    """,
+    tools = [
+        ":c4_ffi",
+        "//tools/uniffi:uniffi_bindgen_swift",
+    ],
+)
+
+# The C half: generated header + the Rust code itself. rust_library provides
+# CcInfo, so linking it here pulls the Rust objects (and std) into whatever
+# Apple binary ends up depending on this.
+cc_library(
+    name = "c4_ffiFFI",
+    hdrs = ["c4_ffiFFI.h"],
+    aspect_hints = [":c4_ffiFFI_interop"],
+    deps = [":c4_ffi"],
+)
+
+# The generated Swift does `import c4_ffiFFI`; this names the Clang module.
+swift_interop_hint(
+    name = "c4_ffiFFI_interop",
+    module_name = "c4_ffiFFI",
+)
+
+# The Swift half: what app code imports (`import C4FFI`).
+swift_library(
+    name = "C4FFI",
+    srcs = ["c4_ffi.swift"],
+    module_name = "C4FFI",
+    target_compatible_with = APPLE_TARGET_COMPATIBLE_WITH,
+    visibility = ["//visibility:public"],
+    deps = [":c4_ffiFFI"],
+)
+
+# Swift calling into Rust. macos_unit_test (rules_apple) rather than
+# swift_test (rules_swift): swift_test hardcodes rpaths to xcode-select's
+# symlinks, which do not exist unless someone has run `sudo xcode-select -s`;
+# macos_unit_test runs via `xcrun xctest`.
+swift_library(
+    name = "C4FFITestsLib",
+    testonly = True,
+    srcs = ["tests/C4FFITests.swift"],
+    target_compatible_with = APPLE_TARGET_COMPATIBLE_WITH,
+    deps = [":C4FFI"],
+)
+
+macos_unit_test(
+    name = "C4FFITests",
+    size = "small",
+    minimum_os_version = "14.0",
+    target_compatible_with = APPLE_TARGET_COMPATIBLE_WITH,
+    deps = [":C4FFITestsLib"],
+)

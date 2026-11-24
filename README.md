@@ -38,6 +38,7 @@ needs installing.
 
 ```bash
 bazel run //apps/web:serve                 # the playground, on http://localhost:8080
+bazel run //apps/macos:rustc4              # the macOS app (needs Xcode)
 bazel run //cli -- check examples          # report problems in a model
 bazel run //cli -- export svg examples -o out      # every view as an image
 bazel run //cli -- export png examples -o out --view shop --scale 2
@@ -55,6 +56,11 @@ the closer view of it, drag to move, pinch or ctrl-scroll to zoom. The address
 bar follows the view, so a link opens on it. The playground has the source
 beside the diagram and redraws as you type.
 
+The macOS app is the same viewer, native. It opens on the example with its
+source to edit; **Open…** (⌘O), dropping a folder on the window, or a path on
+the command line shows a model from disk instead, and the window then follows
+the files as you save them from whatever editor you use.
+
 ## How it is put together
 
 The architecture is [med-log](https://github.com/dmashuda/med-log)'s: a Bazel
@@ -68,7 +74,10 @@ core/c4_layout    Rust: a computed view -> a Diagram. Sizes boxes from their
 core/c4_render    Rust: a Diagram -> SVG text.
 core/c4_ui        Rust: the viewer as a state machine. A Screen out, taps in.
 bindings/wasm     wasm-bindgen wrapper of c4_ui -> JS/TS (web)
+bindings/uniffi   UniFFI wrapper of c4_ui      -> Swift (Apple)
 apps/web          renderer: TypeScript + esbuild. Draws the Screen, pans and zooms.
+apps/apple/C4UI   renderer: SwiftUI. Draws the Screen, and the Diagram in a Canvas.
+apps/macos        macos_application
 cli               Rust: check, export (SVG, PNG, JSON), build (static site)
 examples          models to try
 tools/, bazel/    toolchains, from med-log
@@ -83,8 +92,10 @@ arrowhead. A renderer draws shapes, paths and text at the coordinates given.
 
 That works without a font because text is measured from a table of
 Helvetica's widths (`text.rs`), and renderers draw with a font of that family.
-So the CLI, wasm in a browser and (next) a native app all break lines in the
-same place and produce the same picture.
+So the CLI, wasm in a browser and the native app all break lines in the same
+place and produce the same picture. The web draws the SVG Rust renders; the
+macOS app draws the `Diagram` itself with SwiftUI's `Canvas`, shape for shape
+what `c4_render` writes.
 
 The layout (`graph.rs`) is a layered one written for this, since Graphviz is
 not something that compiles to wasm and a phone: rank, order to reduce
@@ -123,9 +134,9 @@ than silently ignored.
 
 ## What is next
 
-- **Native apps.** The reason for the architecture: a UniFFI binding of
-  `c4_ui` beside the wasm one, and SwiftUI and Android renderers that draw the
-  same `Screen` and `Diagram`, as med-log has.
+- **iOS and Android.** `apps/apple/C4UI` is written to be shared with an iOS
+  app; Android needs the Kotlin half of the UniFFI binding and a renderer,
+  as med-log has.
 - **A bundled font for PNG export**, so the CLI's PNGs do not depend on what
   the machine has installed (they use Helvetica, Arial or the nearest
   sans-serif found).

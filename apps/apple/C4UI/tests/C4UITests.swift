@@ -1,0 +1,160 @@
+import C4FFI
+import SwiftUI
+import XCTest
+
+@testable import C4UI
+
+/// What is the platform's own: reading models from disk and following
+/// them, finding what is under a click, looking at the diagram, and making
+/// an image. What the viewer does is tested in //core/c4_ui.
+@MainActor
+final class C4UITests: XCTestCase {
+    private func temporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("c4ui-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    func testOpensOnTheExampleAndTaps() {
+        let model = C4Model()
+        XCTAssertEqual(model.screen.title, "Landscape")
+        XCTAssertNotNil(model.screen.editor)
+        model.tap("open.shop")
+        XCTAssertEqual(model.screen.view, "shop")
+        model.edit(file: 0, text: "model {")
+        XCTAssertFalse(model.screen.problems.isEmpty)
+        XCTAssertFalse(model.svg().hasPrefix("<svg"))
+    }
+
+    func testAFolderIsReadAndFollowed() throws {
+        let folder = try temporaryDirectory()
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try "specification { element box }".write(to: folder.appendingPathComponent("spec.c4"), atomically: true, encoding: .utf8)
+        let modelFile = folder.appendingPathComponent("sub/model.likec4")
+        try "model { a = box 'A' }".write(to: modelFile, atomically: true, encoding: .utf8)
+        try "not a model".write(to: folder.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(C4Model.sourceFiles(in: [folder]).map(\.name), ["spec.c4", "sub/model.likec4"])
+
+        let model = C4Model()
+        model.open([folder], watching: false)
+        XCTAssertEqual(model.screen.status, "1 element · 0 relationships · 1 view")
+        XCTAssertNil(model.screen.editor, "a model on disk is edited in an editor")
+        XCTAssertEqual(model.generation, 1)
+
+        // Nothing changed: nothing is read again.
+        model.reloadIfChanged()
+        XCTAssertEqual(model.generation, 1)
+
+        // Saved with something new in it.
+        try "model { a = box 'A'; b = box 'B'; a -> b }".write(to: modelFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: modelFile.path)
+        model.reloadIfChanged()
+        XCTAssertEqual(model.screen.status, "2 elements · 1 relationship · 1 view")
+        XCTAssertEqual(model.generation, 2)
+
+        // A single file works too.
+        model.open([modelFile], watching: false)
+        XCTAssertEqual(model.screen.problems.first?.file, "model.likec4")
+    }
+
+    func testAClickFindsWhatIsUnderIt() throws {
+        let model = C4Model()
+        model.tap("view.shop")
+        let diagram = try XCTUnwrap(model.screen.diagram)
+        let node = { (id: String) in diagram.nodes.first { $0.id == id }! }
+        let middle = { (n: Node) in CGPoint(x: n.x + n.width / 2, y: n.y + n.height / 2) }
+
+        let api = node("shop.api")
+        XCTAssertEqual(DiagramHit.id(at: middle(api), in: diagram), "node.shop.api")
+        XCTAssertEqual(DiagramHit.id(at: middle(api), in: diagram, opening: true), "open.shop.api")
+        XCTAssertEqual(DiagramHit.id(at: DiagramHit.glass(of: api), in: diagram), "open.shop.api")
+        // Nothing closer to go to: a double click is a click.
+        let db = node("shop.db")
+        XCTAssertEqual(DiagramHit.id(at: middle(db), in: diagram, opening: true), "node.shop.db")
+        // Inside the group but on none of its boxes: the group.
+        let shop = node("shop")
+        XCTAssertEqual(DiagramHit.id(at: CGPoint(x: shop.x + 6, y: shop.y + 6), in: diagram), "node.shop")
+        XCTAssertEqual(DiagramHit.id(at: CGPoint(x: 1, y: 1), in: diagram), "canvas")
+        // On a line: the end of its curve, a little before the arrowhead.
+        let edge = try XCTUnwrap(diagram.edges.first { $0.id == "shop.web->shop.api" })
+        let onLine = edge.path[edge.path.count / 2 / 3 * 3]
+        XCTAssertEqual(DiagramHit.id(at: CGPoint(x: onLine.x, y: onLine.y), in: diagram), "edge.shop.web->shop.api")
+    }
+
+    func testTheCameraFitsAndZoomsAroundAPoint() throws {
+        let diagram = try XCTUnwrap(C4Model().screen.diagram)
+        var camera = Camera()
+        camera.fit(diagram, in: CGSize(width: diagram.width / 2 + 32, height: 4000))
+        XCTAssertEqual(camera.scale, 0.5, accuracy: 0.001)
+        XCTAssertEqual(camera.offset.width, 16, accuracy: 0.001)
+        XCTAssertTrue(camera.fitted)
+        // Room to spare: natural size, centered.
+        camera.fit(diagram, in: CGSize(width: diagram.width + 232, height: diagram.height + 132))
+        XCTAssertEqual(camera.scale, 1)
+        XCTAssertEqual(camera.offset, CGSize(width: 116, height: 66))
+
+        // What is under the pointer stays under it.
+        let pointer = CGPoint(x: 300, y: 200)
+        let before = camera.diagramPoint(pointer)
+        camera.zoom(by: 2, around: pointer)
+        let after = camera.diagramPoint(pointer)
+        XCTAssertEqual(camera.scale, 2)
+        XCTAssertEqual(before.x, after.x, accuracy: 0.001)
+        XCTAssertEqual(before.y, after.y, accuracy: 0.001)
+        XCTAssertFalse(camera.fitted)
+        camera.zoom(by: 100, around: pointer)
+        XCTAssertEqual(camera.scale, 4, "no closer than this")
+    }
+
+    func testTheDiagramBecomesAPng() throws {
+        let diagram = try XCTUnwrap(C4Model().screen.diagram)
+        let data = try XCTUnwrap(C4View.png(of: diagram, scale: 1))
+        XCTAssertEqual(Array(data.prefix(4)), [0x89, 0x50, 0x4e, 0x47])
+        let image = try XCTUnwrap(NSBitmapImageRep(data: data))
+        XCTAssertEqual(image.pixelsWide, Int(diagram.width))
+        XCTAssertEqual(image.pixelsHigh, Int(diagram.height))
+        // Something was drawn: the middle of the first box is its color.
+        let box = try XCTUnwrap(diagram.nodes.first { !$0.group && $0.shape == .rectangle })
+        let pixel = try XCTUnwrap(image.colorAt(x: Int(box.x + 8), y: Int(box.y + box.height / 2))?.usingColorSpace(.sRGB))
+        let expected = try XCTUnwrap(NSColor(Color(hex: box.fill)).usingColorSpace(.sRGB))
+        // Near enough: the image's color space is the renderer's choice.
+        XCTAssertEqual(pixel.redComponent, expected.redComponent, accuracy: 0.1)
+        XCTAssertEqual(pixel.greenComponent, expected.greenComponent, accuracy: 0.1)
+        XCTAssertEqual(pixel.blueComponent, expected.blueComponent, accuracy: 0.1)
+        XCTAssertEqual(pixel.alphaComponent, 1, accuracy: 0.01)
+    }
+
+    /// The real window's content, drawn offscreen. A picture of it is left
+    /// with the test's outputs (bazel-testlogs/.../test.outputs), to look at.
+    func testTheWindowDraws() throws {
+        let model = C4Model()
+        model.tap("view.shop")
+        model.tap("node.shop.api")
+        let host = NSHostingView(rootView: C4View(model: model))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        // Closed by the teardown below, and released by ARC, not by closing.
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFrontRegardless()
+        addTeardownBlock { window.close() }
+        // A few turns of the run loop: layout, then the canvas fitting itself.
+        for _ in 0..<5 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+        }
+        let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: image)
+        XCTAssertEqual(image.pixelsWide > 0, true)
+        if let outputs = ProcessInfo.processInfo.environment["TEST_UNDECLARED_OUTPUTS_DIR"],
+            let png = image.representation(using: .png, properties: [:])
+        {
+            try png.write(to: URL(fileURLWithPath: outputs).appendingPathComponent("window.png"))
+        }
+        // The panel says what was selected, in the screen's words.
+        XCTAssertEqual(model.screen.details?.title, "API")
+    }
+}

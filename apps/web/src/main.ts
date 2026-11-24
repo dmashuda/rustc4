@@ -25,7 +25,7 @@ type Details = {
   close: Item;
 };
 type Problem = { file: string; line: number; col: number; error: boolean; text: string };
-type Editor = { title: string; files: Item[]; file: number; text: string };
+type Editor = { title: string; files: Item[]; add: Item; remove: Item | null; file: number; text: string };
 type Export = { kind: "Svg" | "Png"; text: string; hint: string; fileName: string };
 type Screen = {
   title: string;
@@ -42,7 +42,7 @@ type Screen = {
   problems: Problem[];
   editor: Editor | null;
   status: string;
-  controls: { zoomIn: string; zoomOut: string; fit: string };
+  controls: { zoomIn: string; zoomOut: string; fit: string; open: string };
 };
 type Source = { name: string; text: string };
 
@@ -274,6 +274,7 @@ async function exportDiagram(kind: Export["kind"], name: string) {
 let shownSvg = "";
 let shownView: string | null = null;
 let shownFile = -1;
+let shownFiles = "";
 
 function drawDetails(details: Details | null) {
   const panel = $("details");
@@ -315,9 +316,15 @@ function drawEditor(editor: Editor | null, screen: Screen) {
   app.dataset.editing = String(!!editor);
   if (!editor) return;
   $("edit-title").textContent = editor.title;
-  $("files").replaceChildren(...(editor.files.length > 1 ? editor.files.map((file) => button(file)) : []));
-  // Only when another file is chosen: what is being typed is not replaced.
-  if (shownFile !== editor.file) {
+  $("files").replaceChildren(
+    ...editor.files.map((file) => button(file)),
+    button(editor.add, "add"),
+    ...(editor.remove ? [button(editor.remove, "remove")] : []),
+  );
+  // Only when another file is showing: what is being typed is not replaced.
+  const showing = `${editor.file}/${editor.files.map((file) => file.text).join("/")}`;
+  if (shownFiles !== showing) {
+    shownFiles = showing;
     shownFile = editor.file;
     source.value = editor.text;
   }
@@ -418,22 +425,31 @@ function draw(screen: Screen) {
   if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
 }
 
+/// Tells Rust what has been typed, if it has not heard yet.
+let pending = 0;
+function flushEdit() {
+  if (!pending) return;
+  clearTimeout(pending);
+  pending = 0;
+  const screen: Screen = JSON.parse(ui.setSource(shownFile, source.value));
+  store(JSON.parse(ui.sources()));
+  draw(screen);
+}
+
 function tap(id: string) {
+  // Before anything else happens to the file being typed in.
+  flushEdit();
   draw(JSON.parse(ui.tap(id)));
+  // A tap may have added or removed a file.
+  if (editable && id.startsWith("file.")) store(JSON.parse(ui.sources()));
 }
 
 // ----------------------------------------------------------------- wiring --
 
-let pending = 0;
 source.addEventListener("input", () => {
   // Typing redraws once it pauses, not on every key.
   clearTimeout(pending);
-  pending = window.setTimeout(() => {
-    const screen: Screen = JSON.parse(ui.setSource(shownFile, source.value));
-    sources[shownFile] = { ...sources[shownFile], text: source.value };
-    store(sources);
-    draw(screen);
-  }, 200);
+  pending = window.setTimeout(flushEdit, 200);
 });
 
 // Tab indents rather than leaving the editor.

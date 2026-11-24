@@ -54,6 +54,18 @@ impl C4Ui {
         json(&self.inner.set_source(file, text))
     }
 
+    /// The sources as they stand, as the constructor takes them: for the
+    /// page to keep between visits.
+    pub fn sources(&self) -> String {
+        let sources: Vec<_> = self
+            .inner
+            .sources()
+            .iter()
+            .map(|s| serde_json::json!({ "name": s.name, "text": s.text }))
+            .collect();
+        json(&sources)
+    }
+
     /// The showing diagram as SVG, or an empty string when there is none.
     /// `background`: a color to paint behind it, for an export; `undefined`
     /// leaves it transparent.
