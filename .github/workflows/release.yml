@@ -1,0 +1,189 @@
+# A release is a tag on main: `git tag v0.1.0 && git push origin v0.1.0`.
+#
+# It builds the `rustc4` command for each platform below, attests where each
+# archive was built (so `gh attestation verify` can tell a download from
+# this workflow from one that is not), and publishes them as a GitHub
+# release. Only the CLI is released: the macOS app is not.
+#
+# Run by hand (workflow_dispatch), or by a pull request that changes this
+# file, it builds and keeps the archives as workflow artifacts, and
+# publishes nothing: a rehearsal.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: tag is on main
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A tag can be pushed from any branch, or from none. Only what has
+      # been merged is released.
+      - name: The tag names a version, and its commit is on main
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$TAG' is not a version: tag releases like v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          commit=$(git rev-parse "refs/tags/$TAG^{commit}")
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$TAG is at $commit, which is not on main. Merge it first, then tag the commit on main."
+            exit 1
+          fi
+
+      - name: Version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            echo "version=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=rehearsal-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-latest
+            bazelisk: bazelisk-linux-amd64
+            bazelisk_sha256: a248ae2b2b62b5baebb748f6fba7203bff1a27e5d01b55399a8406744cb539e8
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+            bazelisk: bazelisk-linux-arm64
+            bazelisk_sha256: b2bcc040c213b44586b121bda6d983c35df121b917c3a7a66fb16f2fa0df1a4f
+          - target: macos-arm64
+            runner: macos-latest
+            bazelisk: bazelisk-darwin-arm64
+            bazelisk_sha256: 555d2ff912ccd336d0060bdb5251ef2f62629c6f8fbadb59005a45d5625793ec
+    runs-on: ${{ matrix.runner }}
+    # Nothing is cached between releases, so each builds the toolchain
+    # (on Linux: glibc, libc++, compiler-rt and libunwind) from source.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Most runners have Bazelisk as `bazel`. Where one does not, this
+      # exact build of it is fetched, and checked before it is run.
+      - name: Bazel
+        env:
+          BAZELISK: ${{ matrix.bazelisk }}
+          BAZELISK_SHA256: ${{ matrix.bazelisk_sha256 }}
+        run: |
+          if ! command -v bazel >/dev/null; then
+            mkdir -p "$RUNNER_TEMP/bin"
+            curl --fail --silent --show-error --location \
+              "https://github.com/bazelbuild/bazelisk/releases/download/v1.30.0/$BAZELISK" \
+              --output "$RUNNER_TEMP/bin/bazel"
+            echo "$BAZELISK_SHA256  $RUNNER_TEMP/bin/bazel" | shasum -a 256 --check
+            chmod +x "$RUNNER_TEMP/bin/bazel"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/bin:$PATH"
+          fi
+          bazel --version
+
+      - name: Build the CLI
+        run: bazel build --config=release //cli
+
+      # The binary that is about to be published, not another build of it.
+      - name: It runs
+        run: |
+          bazel-bin/cli/cli --help
+          bazel-bin/cli/cli check examples/shop.c4
+
+      - name: Archive
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          name="rustc4-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp bazel-bin/cli/cli "dist/$name/rustc4"
+          cp LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -r "dist/$name"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rustc4-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: attest and publish
+    needs: [check, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    # Only this job can sign or publish, and it runs none of the
+    # repository's code: it takes the archives the builds made.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: rustc4-*
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum rustc4-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # Signed build provenance for each archive: which repository, which
+      # workflow, which commit. Verify a download with
+      #   gh attestation verify rustc4-<version>-<target>.tar.gz --repo <owner>/rustc4
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/rustc4-*.tar.gz
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # v1.2.3-rc.1 is a pre-release.
+          flags=()
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            "${flags[@]}"
