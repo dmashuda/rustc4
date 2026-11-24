@@ -32,6 +32,8 @@ pub enum Tok {
     Star,
     LBrace,
     RBrace,
+    LParen,
+    RParen,
     Eq,
     Ne,
     Colon,
@@ -57,6 +59,8 @@ impl Tok {
             Tok::Star => "'*'".into(),
             Tok::LBrace => "'{'".into(),
             Tok::RBrace => "'}'".into(),
+            Tok::LParen => "'('".into(),
+            Tok::RParen => "')'".into(),
             Tok::Eq => "'='".into(),
             Tok::Ne => "'!='".into(),
             Tok::Colon => "':'".into(),
@@ -201,12 +205,17 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             k
         };
         let is_url = scheme_end > i && rest_starts(scheme_end, "://");
-        let is_path = rest_starts(i, "./") || rest_starts(i, "../");
+        // `@/x.svg` is a path too: from wherever images are kept.
+        let is_path = rest_starts(i, "./") || rest_starts(i, "../") || rest_starts(i, "@/");
         if is_url || is_path {
             let mut s = String::new();
             while i < chars.len() && !chars[i].is_whitespace() {
                 s.push(chars[i]);
                 advance!();
+            }
+            // `icon ./a.svg; color red`: what ends the line is not part of it.
+            while s.ends_with([';', ',']) {
+                s.pop();
             }
             push(Tok::Raw(s), &mut spaced);
             continue;
@@ -263,6 +272,8 @@ pub fn lex(file: usize, text: &str) -> (Vec<Token>, Vec<LexError>) {
             ('*', _) => (Tok::Star, 1),
             ('{', _) => (Tok::LBrace, 1),
             ('}', _) => (Tok::RBrace, 1),
+            ('(', _) => (Tok::LParen, 1),
+            (')', _) => (Tok::RParen, 1),
             ('=', _) => (Tok::Eq, 1),
             (':', _) => (Tok::Colon, 1),
             (';', _) => (Tok::Semi, 1),

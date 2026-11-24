@@ -68,6 +68,53 @@ pub enum Arrow {
     ODot,
 }
 
+/// One of five steps, for a box's `size`, `padding` and `textSize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Size {
+    XSmall,
+    Small,
+    #[default]
+    Medium,
+    Large,
+    XLarge,
+}
+
+impl Size {
+    /// `small` or `sm`, and so on.
+    pub(crate) fn parse(value: &str) -> Option<Size> {
+        Some(match value {
+            "xsmall" | "xs" => Size::XSmall,
+            "small" | "sm" => Size::Small,
+            "medium" | "md" => Size::Medium,
+            "large" | "lg" => Size::Large,
+            "xlarge" | "xl" => Size::XLarge,
+            _ => return None,
+        })
+    }
+}
+
+/// Which side of a box's words its icon is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconPosition {
+    #[default]
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl IconPosition {
+    pub(crate) fn parse(value: &str) -> Option<IconPosition> {
+        Some(match value {
+            "left" => IconPosition::Left,
+            "right" => IconPosition::Right,
+            "top" => IconPosition::Top,
+            "bottom" => IconPosition::Bottom,
+            _ => return None,
+        })
+    }
+}
+
 /// How an element is drawn. A color is a theme name (`primary`, `green`...)
 /// or one from `specification { color name #hex }`.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,11 +124,36 @@ pub struct ElementStyle {
     pub border: Line,
     /// Of a group's fill, 0 to 1.
     pub opacity: f64,
+    /// How big its box is at the least. At `XSmall` it says only its title.
+    pub size: Size,
+    /// How much room its box leaves around its words.
+    pub padding: Size,
+    pub text_size: Size,
+    /// Drawn as a stack: there are several of it.
+    pub multiple: bool,
+    /// An image to show with its words: an `https:` URL, or a `data:` URL
+    /// holding the file the source named.
+    pub icon: Option<String>,
+    /// How big the icon is; as `size`, unless it says.
+    pub icon_size: Option<Size>,
+    pub icon_position: IconPosition,
 }
 
 impl Default for ElementStyle {
     fn default() -> Self {
-        ElementStyle { shape: Shape::Rectangle, color: "primary".into(), border: Line::Solid, opacity: 1.0 }
+        ElementStyle {
+            shape: Shape::Rectangle,
+            color: "primary".into(),
+            border: Line::Solid,
+            opacity: 1.0,
+            size: Size::Medium,
+            padding: Size::Medium,
+            text_size: Size::Medium,
+            multiple: false,
+            icon: None,
+            icon_size: None,
+            icon_position: IconPosition::Left,
+        }
     }
 }
 
@@ -151,6 +223,7 @@ pub struct Relation {
     pub description: String,
     pub technology: String,
     pub tags: Vec<String>,
+    pub metadata: Vec<(String, String)>,
     pub style: RelationStyle,
     pub origin: Origin,
 }
@@ -164,6 +237,8 @@ pub struct View {
     pub description: String,
     /// The element this is a view *of*, if any.
     pub of: Option<usize>,
+    /// What the `views` block it is in says of all its views.
+    pub(crate) shared: Vec<ViewRule>,
     pub(crate) rules: Vec<ViewRule>,
     /// The view whose rules come before this one's, and where that was written.
     pub(crate) extends: Option<(String, Span)>,
@@ -200,6 +275,11 @@ pub struct Model {
     pub generated_views: Vec<View>,
     /// `specification { color name #hex }`
     pub colors: BTreeMap<String, String>,
+    /// What `global { }` blocks named, by (is it a style, its name).
+    pub(crate) globals: BTreeMap<(bool, String), Vec<ViewRule>>,
+    /// What each `icon` written in the sources turned out to be, by (the
+    /// file it is written in, what is written).
+    pub(crate) icons: BTreeMap<(usize, String), String>,
     pub(crate) by_fqn: BTreeMap<String, usize>,
 }
 
@@ -209,6 +289,10 @@ pub struct Model {
 pub struct Workspace {
     pub model: Model,
     pub diagnostics: Vec<Diagnostic>,
+    /// Files the sources name (an icon's image) that were not among them,
+    /// each by the name it would have beside the source that asks for it.
+    /// Read them, give them to [`load`] with the rest, and they are found.
+    pub wanted: Vec<String>,
 }
 
 impl Workspace {
@@ -326,9 +410,45 @@ struct Builder<'a> {
     diagnostics: Vec<Diagnostic>,
     kinds: BTreeMap<String, KindSpec>,
     rel_kinds: BTreeMap<String, RelKindSpec>,
+    wanted: Vec<String>,
 }
 
-/// Reads every source into one model.
+/// Whether a source is an image the others may name, rather than a model.
+fn is_image(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".svg")
+}
+
+/// The name of the file a source means by a path written in it.
+fn beside(source: &str, path: &str) -> String {
+    let mut parts: Vec<&str> = source.split('/').collect();
+    parts.pop();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|p| !p.is_empty() && *p != "..") => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// An SVG's text as a URL that holds it.
+fn data_url(svg: &str) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::from("data:image/svg+xml;base64,");
+    for chunk in svg.as_bytes().chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
+        for k in 0..4 {
+            out.push(if k <= chunk.len() { DIGITS[(n >> (18 - 6 * k)) as usize & 63] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// Reads every source into one model. A source named `.svg` is an image
+/// for the others' icons; the rest are the model's files.
 pub fn load(sources: &[Source]) -> Workspace {
     let mut b = Builder {
         sources,
@@ -336,9 +456,14 @@ pub fn load(sources: &[Source]) -> Workspace {
         diagnostics: Vec::new(),
         kinds: BTreeMap::new(),
         rel_kinds: BTreeMap::new(),
+        wanted: Vec::new(),
     };
     let mut files = Vec::new();
     for (i, source) in sources.iter().enumerate() {
+        if is_image(&source.name) {
+            files.push(ast::File::default());
+            continue;
+        }
         let (file, errors) = parser::parse(i, &source.text);
         for e in errors {
             let severity =
@@ -411,14 +536,43 @@ pub fn load(sources: &[Source]) -> Workspace {
         b.relations(&file.model, None);
     }
     for file in &files {
+        for name in &file.imports {
+            if b.model.resolve(&name.parts, None).is_none() {
+                b.error(
+                    name.span,
+                    format!(
+                        "There is no element '{}' to import: read the files that define it along with these.",
+                        name.text()
+                    ),
+                );
+            }
+        }
+        for global in &file.globals {
+            let what = if global.style { "style" } else { "predicate group" };
+            let key = (global.style, global.name.clone());
+            if b.model.globals.contains_key(&key) {
+                b.error(global.span, format!("There is already a global {what} '{}'.", global.name));
+                continue;
+            }
+            for rule in &global.rules {
+                b.check_rule(rule, None);
+            }
+            b.model.globals.insert(key, global.rules.clone());
+        }
+    }
+    for file in &files {
+        for rule in file.view_styles.iter().flatten() {
+            b.check_rule(rule, None);
+        }
         for view in &file.views {
-            b.view(view, &file.view_styles);
+            b.view(view, &file.view_styles[view.block]);
         }
     }
     b.extends();
     let everything = || {
         vec![ViewRule::Include(vec![ast::Predicate::Element {
             expr: ast::ElementExpr::Wildcard,
+            cond: None,
             with: StyleProps::default(),
         }])]
     };
@@ -428,6 +582,7 @@ pub fn load(sources: &[Source]) -> Workspace {
             title: "Landscape".into(),
             description: String::new(),
             of: None,
+            shared: Vec::new(),
             rules: everything(),
             extends: None,
             dynamic: false,
@@ -452,6 +607,7 @@ pub fn load(sources: &[Source]) -> Workspace {
             title: el.title.clone(),
             description: String::new(),
             of: Some(i),
+            shared: Vec::new(),
             rules: everything(),
             extends: None,
             dynamic: false,
@@ -461,7 +617,7 @@ pub fn load(sources: &[Source]) -> Workspace {
         b.model.generated_views.push(view);
     }
     b.diagnostics.sort_by(|x, y| (&x.file, x.line, x.col).cmp(&(&y.file, y.line, y.col)));
-    Workspace { model: b.model, diagnostics: b.diagnostics }
+    Workspace { model: b.model, diagnostics: b.diagnostics, wanted: b.wanted }
 }
 
 /// Text as it was meant: a string written over several indented lines
@@ -499,6 +655,58 @@ impl Builder<'_> {
 
     fn error(&mut self, span: Span, message: String) {
         self.report(span, Severity::Error, message);
+    }
+
+    /// What an `icon` means: `Some(None)` for no icon (`icon none`),
+    /// `None` when it could not be had, which is then reported.
+    fn icon(&mut self, value: &str, span: Span) -> Option<Option<String>> {
+        if value == "none" {
+            return Some(None);
+        }
+        let lower = value.to_ascii_lowercase();
+        let source = self.sources.get(span.file).map(|s| s.name.as_str()).unwrap_or_default();
+        let href = if ["https://", "http://", "data:image/"].iter().any(|p| lower.starts_with(p)) {
+            value.to_string()
+        } else if value.starts_with("@/") {
+            self.report(
+                span,
+                Severity::Warning,
+                "Image aliases ('@/...') are not supported yet; write the path from this file, like './images/logo.svg'.".into(),
+            );
+            return None;
+        } else if value.starts_with("./") || value.starts_with("../") {
+            if !lower.ends_with(".svg") {
+                self.report(
+                    span,
+                    Severity::Warning,
+                    format!("An icon from a file that is not an SVG ('{value}') is not supported yet; use an SVG, or a URL."),
+                );
+                return None;
+            }
+            let name = beside(source, value);
+            match self.sources.iter().find(|s| s.name == name) {
+                Some(image) => data_url(&image.text),
+                None => {
+                    if !self.wanted.contains(&name) {
+                        self.wanted.push(name.clone());
+                    }
+                    self.error(
+                        span,
+                        format!("There is no file '{name}' for this icon: check the path, or use a URL."),
+                    );
+                    return None;
+                }
+            }
+        } else {
+            self.report(
+                span,
+                Severity::Warning,
+                format!("Bundled icons ('{value}') are not supported yet; use a URL, or the path of an SVG file like './{}.svg'.", value.rsplit(':').next().unwrap_or(value)),
+            );
+            return None;
+        };
+        self.model.icons.insert((span.file, value.to_string()), href.clone());
+        Some(Some(href))
     }
 
     fn color(&mut self, value: &str, span: Span) -> Option<String> {
@@ -561,14 +769,59 @@ impl Builder<'_> {
                     Ok(n) if (0.0..=100.0).contains(&n) => style.opacity = n / 100.0,
                     _ => self.error(*span, format!("'{value}' is not an opacity: use 0% to 100%.")),
                 },
-                // Accepted so LikeC4 sources load; they change nothing here
-                // yet, and say so.
-                "icon" | "iconColor" | "iconSize" | "size" | "padding" | "textSize" | "multiple" => self
-                    .report(
+                "size" | "padding" | "textSize" => match Size::parse(value) {
+                    Some(size) => match key.as_str() {
+                        "size" => style.size = size,
+                        "padding" => style.padding = size,
+                        _ => style.text_size = size,
+                    },
+                    None => self.error(
+                        *span,
+                        format!(
+                            "'{value}' is not a size: use xsmall, small, medium, large or xlarge (or xs, sm, md, lg, xl)."
+                        ),
+                    ),
+                },
+                "multiple" => match value.as_str() {
+                    "true" => style.multiple = true,
+                    "false" => style.multiple = false,
+                    _ => self.error(*span, format!("'{value}' is not true or false: write 'multiple true'.")),
+                },
+                "icon" => {
+                    if let Some(icon) = self.icon(value, *span) {
+                        style.icon = icon;
+                    }
+                }
+                "iconSize" => match Size::parse(value) {
+                    Some(size) => style.icon_size = Some(size),
+                    None => self.error(
+                        *span,
+                        format!(
+                            "'{value}' is not a size: use xsmall, small, medium, large or xlarge (or xs, sm, md, lg, xl)."
+                        ),
+                    ),
+                },
+                "iconPosition" => match IconPosition::parse(value) {
+                    Some(position) => style.icon_position = position,
+                    None => self.error(
+                        *span,
+                        format!("'{value}' is not a side: use left, right, top or bottom."),
+                    ),
+                },
+                // Only the icons LikeC4 bundles take a color, and those are
+                // reported where they are asked for.
+                "iconColor" => {
+                    self.color(value, *span);
+                }
+                "sizing" => match value.as_str() {
+                    "auto" => {}
+                    "fixed" => self.report(
                         *span,
                         Severity::Warning,
-                        format!("'{key}' is not supported yet; it changes nothing in the drawing."),
+                        "'sizing fixed' is not supported yet; a box grows to fit its words.".into(),
                     ),
+                    _ => self.error(*span, format!("'{value}' is not a sizing: use auto or fixed.")),
+                },
                 _ => self.error(*span, format!("Unknown style property '{key}'.")),
             }
         }
@@ -782,6 +1035,7 @@ impl Builder<'_> {
                             def.technology.as_deref().or(kind_technology.as_deref()).unwrap_or_default(),
                         ),
                         tags: def.tags.clone(),
+                        metadata: def.metadata.clone(),
                         style,
                         origin: self.origin(def.span),
                     });
@@ -819,8 +1073,6 @@ impl Builder<'_> {
         for rule in &def.rules {
             self.check_rule(rule, of);
         }
-        let mut rules = shared_styles.to_vec();
-        rules.extend(def.rules.iter().cloned());
         let mut steps = Vec::new();
         let mut count = 0;
         for item in &def.steps {
@@ -849,7 +1101,8 @@ impl Builder<'_> {
             title,
             description: tidy(def.description.as_deref().unwrap_or_default()),
             of,
-            rules,
+            shared: shared_styles.to_vec(),
+            rules: def.rules.clone(),
             extends: def.extends.clone(),
             dynamic: def.dynamic,
             sequence: def.sequence,
@@ -927,7 +1180,7 @@ impl Builder<'_> {
             ViewRule::Include(predicates) | ViewRule::Exclude(predicates) => {
                 for predicate in predicates {
                     match predicate {
-                        Predicate::Element { expr, with } => {
+                        Predicate::Element { expr, with, .. } => {
                             exprs.push(expr);
                             let mut scratch = ElementStyle::default();
                             let style_only = StyleProps(
@@ -944,9 +1197,10 @@ impl Builder<'_> {
                             );
                             self.element_style(&style_only, &mut scratch);
                         }
-                        Predicate::Relation(RelExpr::Direct(a, b)) => exprs.extend([a, b]),
+                        Predicate::Relation(RelExpr::Direct(a, b), _) => exprs.extend([a, b]),
                         Predicate::Relation(
                             RelExpr::Incoming(e) | RelExpr::Outgoing(e) | RelExpr::InOut(e),
+                            _,
                         ) => exprs.push(e),
                     }
                 }
@@ -956,7 +1210,25 @@ impl Builder<'_> {
                 let mut scratch = ElementStyle::default();
                 self.element_style(style, &mut scratch);
             }
-            ViewRule::AutoLayout(_) => {}
+            ViewRule::AutoLayout { .. } => {}
+            ViewRule::Global { name, style, span } => {
+                if !self.model.globals.contains_key(&(*style, name.clone())) {
+                    let what = if *style { "style" } else { "predicate group" };
+                    let known: Vec<&str> = self
+                        .model
+                        .globals
+                        .keys()
+                        .filter(|(s, _)| s == style)
+                        .map(|(_, n)| n.as_str())
+                        .collect();
+                    let hint = if known.is_empty() {
+                        "Define it in a 'global { }' block.".to_string()
+                    } else {
+                        format!("The ones defined are: {}.", known.join(", "))
+                    };
+                    self.error(*span, format!("There is no global {what} '{name}'. {hint}"));
+                }
+            }
         }
         for expr in exprs {
             match expr {

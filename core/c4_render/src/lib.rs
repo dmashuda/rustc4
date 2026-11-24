@@ -62,9 +62,9 @@ fn text(out: &mut String, label: &Label) {
     );
 }
 
-/// The outline of a node's shape.
-fn shape(out: &mut String, node: &Node) {
-    let (x, y, w, h) = (node.x, node.y, node.width, node.height);
+/// The outline of a node's shape, with its top left at `x`, `y`.
+fn shape(out: &mut String, node: &Node, x: f64, y: f64) {
+    let (w, h) = (node.width, node.height);
     let (fill, stroke) = (esc(&node.fill), esc(&node.stroke));
     let border = dash(node.border);
     let paint = format!(r#"fill="{fill}" stroke="{stroke}" stroke-width="1.5"{border}"#);
@@ -188,7 +188,22 @@ fn node(out: &mut String, node: &Node) {
             dash(node.border),
         );
     } else {
-        shape(out, node);
+        // A stack: the ones behind first.
+        for corner in &node.behind {
+            shape(out, node, corner.x, corner.y);
+        }
+        shape(out, node, node.x, node.y);
+    }
+    if let Some(icon) = &node.icon {
+        let _ = write!(
+            out,
+            r#"<image href="{}" x="{}" y="{}" width="{}" height="{}" preserveAspectRatio="xMidYMid meet"/>"#,
+            esc(&icon.href),
+            n(icon.x),
+            n(icon.y),
+            n(icon.width),
+            n(icon.height),
+        );
     }
     for label in &node.labels {
         text(out, label);
@@ -392,6 +407,35 @@ mod tests {
         assert!(out.contains("<polyline"), "an open arrowhead");
         assert_eq!(out.matches("<polygon").count(), 4, "three arrowheads and a diamond");
         assert!(out.contains(r#"<g class="open""#), "somewhere to go");
+    }
+
+    #[test]
+    fn a_stack_is_its_shape_twice() {
+        let out = render(
+            "specification { element store { style { shape storage; multiple true } } }
+            model { one = store 'One' }
+            views { view index { include * } }",
+            &SvgOptions::default(),
+        );
+        // A cylinder is two paths: the one behind is drawn first, 8 along
+        // and 8 down.
+        let node = &out[out.find(r#"<g class="node""#).unwrap()..];
+        let starts: Vec<&str> =
+            node.match_indices(r#"<path d="M"#).map(|(i, m)| &node[i + m.len()..i + m.len() + 5]).collect();
+        assert_eq!(starts, ["32 42", "32 42", "24 34", "24 34"]);
+    }
+
+    #[test]
+    fn an_icon_is_an_image_under_the_words() {
+        let out = render(
+            "specification { element box }
+            model { one = box 'One' { icon https://example.com/a.svg?x=1&y=2 } }
+            views { view index { include * } }",
+            &SvgOptions::default(),
+        );
+        let image = r#"<image href="https://example.com/a.svg?x=1&amp;y=2" x="59.41" y="44" width="36" height="36" preserveAspectRatio="xMidYMid meet"/>"#;
+        let (shape, at, words) = (out.find("<rect").unwrap(), out.find(image), out.find("<text").unwrap());
+        assert!(at.is_some_and(|at| shape < at && at < words), "{out}");
     }
 
     #[test]

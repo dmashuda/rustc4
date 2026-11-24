@@ -59,9 +59,10 @@ bazel run //cli -- --help
 bazel test //...
 ```
 
-`examples/` holds two separate models, `shop.c4` and `bigbank.c4`: give one
-file, as above. (Given the directory, they are read as one model, which is
-what a directory means, and the two things both define are reported.)
+`examples/` holds separate models: `shop.c4`, `bigbank.c4`, and
+`delivery/`, which shows icons, sizes, stacks, `where` and `global`. Give
+one, as above. (Given all of `examples`, they are read as one model, which
+is what a directory means, and what more than one defines is reported.)
 
 To have `rustc4` as a command, build it once and put it on your `PATH`:
 
@@ -87,6 +88,11 @@ The macOS app is the same viewer, native. It opens on the example with its
 source to edit; **Open…** (⌘O), dropping a folder on the window, or a path on
 the command line shows a model from disk instead, and the window then follows
 the files as you save them from whatever editor you use.
+
+An icon's SVG file is read along with the sources that name it, and goes
+into a bundle and a site with them. An icon from a URL is fetched by whatever
+shows the diagram (a browser, the macOS app), so a PNG, which nothing
+fetches for, is drawn without it, and says so.
 
 ## One model from many repositories
 
@@ -212,17 +218,20 @@ The LikeC4 dialect, most of it:
 | --- | --- |
 | `specification` | `element` kinds with `style`, `relationship` kinds, `tag`, `color name #hex` |
 | `model` | elements (`name = kind 'Title'` or `kind name 'Title'`), nested to any depth; `title`, `description`, `summary` (what the box says, if it should differ from the description), `technology`, `#tags`, `link`, `metadata`, `style`; relationships `a -> b 'title' 'technology'`, `-> b` from inside an element, `a -[kind]-> b`, with `line`, `color`, `head`, `tail`; `extend a.b { }` |
-| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps; `variant sequence` draws them as a sequence diagram |
-| Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity` |
+| `views` | `view id of element`, `view b extends a`, `title`, `description`, `include` / `exclude` of `*`, `a.b`, `a.*`, `a.**`, `a._`, `element.kind = k`, `element.tag = #t`, `-> a`, `a ->`, `-> a ->`, `a -> b`; `where` after any of them (`include * where kind is service and tag is not #old`, and after a relationship `-> a where source.tag is #x`: `kind`, `tag`, `metadata.key`, `is` / `is not`, `and`, `or`, `not`, brackets); `include a with { color red }`; `style targets { }`; `autoLayout TopBottom / LeftRight / BottomTop / RightLeft`, then if you like how far apart rows and boxes are (`autoLayout LeftRight 120 110`); `global style name` and `global predicate name`; `dynamic view id { a -> b 'title'; a <- b; a -> b -> c; parallel { } }` with `notes`, drawn as numbered steps; `variant sequence` draws them as a sequence diagram |
+| Styles | shapes `rectangle person browser mobile cylinder storage queue`; the theme colors or your own; `border`, `opacity`; `size`, `padding` and `textSize` from `xsmall` to `xlarge`; `multiple true` for a stack; `icon` from a URL or an SVG file beside the source (`icon ./icons/db.svg`), with `iconSize` and `iconPosition left / right / top / bottom` |
+| `global` | `style name targets { }`, `styleGroup name { }`, `predicateGroup name { }`: rules with a name, for any view to ask for |
+| `import` | `import { a } from 'project'` is checked and otherwise unneeded: names are already global |
 
 Sources may be split over any number of `.c4` (or `.likec4`) files; they are
 read as one model. A mistake is reported with its file, line and column, and
 everything that could be understood is still drawn.
 
-Not there yet: deployment models and views, `where` conditions, `global`
-blocks, icons, the sizing styles (`size`, `padding`, `textSize`, `multiple`)
-and manual layout. Each is reported as a warning ("not supported yet") and
-skipped, never silently ignored; the rest of the model is still drawn.
+Not there yet: deployment models and views, the icons LikeC4 bundles
+(`tech:rust`, `aws:lambda`), icons from files that are not SVG and from
+`@/` aliases, `sizing fixed`, `ortho` routing and manual layout. Each is
+reported as a warning ("not supported yet") and skipped, never silently
+ignored; the rest of the model is still drawn.
 
 ## What is next
 

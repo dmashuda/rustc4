@@ -1,0 +1,175 @@
+// A parcel delivery company: an example of the parts of the language the
+// shop does not use. Icons, sizes and stacks; `where`; `global` rules; how
+// far apart `autoLayout` puts things.
+//
+//   bazel run //cli -- export png examples/delivery -o out --background '#fff'
+//   bazel run //apps/macos:rustc4 -- examples/delivery
+
+specification {
+  element actor {
+    style {
+      shape person
+      color green
+      size small
+    }
+  }
+  element app
+  // Every service has the gear, unless it says otherwise.
+  element service {
+    style { icon ./icons/gear.svg }
+  }
+  element store {
+    style {
+      shape storage
+      icon ./icons/database.svg
+      iconPosition top
+    }
+  }
+  element stream {
+    style {
+      shape queue
+      icon ./icons/queue.svg
+    }
+  }
+  element partner {
+    style { color muted }
+  }
+
+  relationship async {
+    line dotted
+    head open
+  }
+
+  tag legacy
+  tag pii
+}
+
+// Rules with a name, for any view to ask for.
+global {
+  style quiet_legacy element.tag = #legacy {
+    color muted
+  }
+  styleGroup marked {
+    style element.tag = #pii { color red }
+    style element.tag = #legacy { color muted }
+  }
+  predicateGroup current {
+    include *
+    exclude * where tag is #legacy
+  }
+}
+
+model {
+  sender = actor 'Sender' 'Has a parcel to send'
+  driver = actor 'Driver' 'Carries it there'
+
+  web = app 'Booking site' 'Where a delivery is booked' 'TypeScript' {
+    style { shape browser }
+  }
+  handheld = app 'Driver app' 'The round, stop by stop' 'Kotlin' {
+    style {
+      shape mobile
+      multiple true
+    }
+  }
+
+  // The one everything goes through: bigger, and in bigger type.
+  api = service 'API' 'One front door for every client' 'Rust' {
+    style {
+      size large
+      textSize large
+    }
+  }
+  bookings = service 'Bookings' 'Takes a booking and prices it' 'Rust' {
+    metadata { team 'sales' }
+  }
+  routing = service 'Routing' 'Works out each van\'s round' 'Rust' {
+    icon ./icons/van.svg
+    metadata { team 'operations' }
+    // Several of them run at once.
+    style {
+      multiple true
+      iconSize large
+    }
+  }
+  tracking = service 'Tracking' 'Knows where every parcel is' 'Rust' {
+    metadata { team 'operations' }
+    style { multiple true }
+  }
+  labels = service 'Label printer' 'Prints what goes on the box' 'Perl' {
+    #legacy
+    icon none
+    style { size small }
+  }
+
+  customers = store 'Customers' 'Who sends and who receives' 'PostgreSQL' {
+    #pii
+  }
+  parcels = store 'Parcels' 'Every parcel and where it has been' 'PostgreSQL'
+  events = stream 'Scans' 'Each time a parcel is scanned' 'Kafka'
+
+  maps = partner 'Map provider' 'Roads and traffic'
+  post = partner 'National post' 'Takes what we cannot reach' {
+    #legacy
+  }
+
+  sender -> web 'books with'
+  driver -> handheld 'follows'
+  web -> api 'calls' 'HTTPS'
+  handheld -> api 'calls' 'HTTPS'
+  api -> bookings 'books'
+  api -> tracking 'asks'
+  api -> routing 'asks'
+  bookings -> customers 'reads and writes'
+  bookings -> parcels 'writes'
+  bookings -> labels 'prints through'
+  handheld -[async]-> events 'scans' {
+    metadata { via 'mobile network' }
+  }
+  events -[async]-> tracking 'feeds'
+  tracking -> parcels 'reads and writes'
+  routing -> parcels 'reads'
+  routing -> maps 'asks the way' 'HTTPS'
+  bookings -> post 'hands over to'
+}
+
+views {
+  view index {
+    title 'Everything'
+    description 'Icons, sizes and stacks'
+    include *
+    global style quiet_legacy
+  }
+
+  view current {
+    title 'Without what is on its way out'
+    description 'A predicate group: everything, less what is tagged #legacy'
+    global predicate current
+  }
+
+  view operations {
+    title 'What operations runs'
+    description 'where: by metadata, and what those depend on'
+    include * where metadata.team is 'operations'
+    include -> parcels, routing -> maps
+    include events -> * where kind is async
+    autoLayout LeftRight 110 30
+  }
+
+  view data {
+    title 'Where the data is'
+    description 'where: by kind, with everything that writes to a store'
+    include * where kind is store or kind is stream
+    include -> customers, -> parcels
+    include * -> events where kind is async and source.kind is app
+    global style marked
+  }
+
+  view spread {
+    title 'Services, spread out'
+    description 'autoLayout with distances: rows 160 apart, boxes 24'
+    include * where kind is service and tag is not #legacy
+    include api
+    autoLayout TopBottom 160 24
+  }
+}

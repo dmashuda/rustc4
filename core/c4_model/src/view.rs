@@ -8,8 +8,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{Direction, ElementExpr, Predicate, RelExpr, StyleProps, ViewRule};
-use crate::model::{Arrow, ElementStyle, Line, Model, RelationStyle, Shape, View};
+use crate::ast::{Condition, Direction, ElementExpr, Predicate, RelExpr, StyleProps, ViewRule, Whose};
+use crate::model::{
+    Arrow, ElementStyle, IconPosition, Line, Model, Relation, RelationStyle, Shape, Size, View,
+};
 
 #[derive(Debug, Clone)]
 pub struct ViewNode {
@@ -26,6 +28,15 @@ pub struct ViewNode {
     pub color: String,
     pub border: Line,
     pub opacity: f64,
+    pub size: Size,
+    pub padding: Size,
+    pub text_size: Size,
+    /// Drawn as a stack: there are several of it.
+    pub multiple: bool,
+    /// An image to show with its words: a URL, `https:` or `data:`.
+    pub icon: Option<String>,
+    pub icon_size: Size,
+    pub icon_position: IconPosition,
     /// Whether any of its descendants are in the view: drawn as a group.
     pub group: bool,
     /// Another view of this element, to go to from here.
@@ -58,6 +69,10 @@ pub struct ComputedView {
     pub title: String,
     pub description: String,
     pub direction: Direction,
+    /// How far apart rows are, and the boxes in a row, if the view says:
+    /// `autoLayout TopBottom 120 110`.
+    pub rank_gap: Option<f64>,
+    pub node_gap: Option<f64>,
     /// A dynamic view: its lines are steps, in the order they happen.
     pub dynamic: bool,
     /// To be drawn as a sequence rather than a diagram.
@@ -80,7 +95,32 @@ struct Computing<'a> {
     scope: Option<usize>,
     visible: Vec<bool>,
     overrides: BTreeMap<usize, StyleProps>,
-    excluded: Vec<RelFilter>,
+    /// Each with its `where`, if it had one.
+    excluded: Vec<(RelFilter, Option<Condition>)>,
+}
+
+/// What a `where` condition can ask about one thing.
+struct Facts<'a> {
+    kind: &'a str,
+    tags: &'a [String],
+    metadata: &'a [(String, String)],
+}
+
+/// Whether a condition holds, given whose facts are whose. Asked about
+/// something that is not there (an element has no `source`), it does not.
+fn holds<'a>(cond: &Condition, facts: &dyn Fn(Whose) -> Option<Facts<'a>>) -> bool {
+    match cond {
+        Condition::Kind { of, name, eq } => facts(*of).is_some_and(|f| (f.kind == name) == *eq),
+        Condition::Tag { of, name, eq } => facts(*of).is_some_and(|f| f.tags.contains(name) == *eq),
+        Condition::Metadata { of, key, value, eq } => facts(*of).is_some_and(|f| {
+            let found =
+                f.metadata.iter().any(|(k, v)| k == key && value.as_ref().is_none_or(|want| v == want));
+            found == *eq
+        }),
+        Condition::Not(inner) => !holds(inner, facts),
+        Condition::And(a, b) => holds(a, facts) && holds(b, facts),
+        Condition::Or(a, b) => holds(a, facts) || holds(b, facts),
+    }
 }
 
 impl Model {
@@ -88,17 +128,37 @@ impl Model {
         self.views.iter().map(|v| v.id.as_str()).collect()
     }
 
-    /// The rules of a view, with those it inherits first.
-    fn rules_of<'a>(&'a self, view: &'a View, depth: usize) -> Vec<&'a ViewRule> {
+    /// The rules of a view: what its `views` block says of every view,
+    /// then its own, each with those it inherits first.
+    fn rules_of<'a>(&'a self, view: &'a View) -> Vec<&'a ViewRule> {
         let mut rules = Vec::new();
+        self.collect_rules(view, true, 0, &mut rules);
+        self.collect_rules(view, false, 0, &mut rules);
+        rules
+    }
+
+    fn collect_rules<'a>(
+        &'a self,
+        view: &'a View,
+        shared: bool,
+        depth: usize,
+        rules: &mut Vec<&'a ViewRule>,
+    ) {
         if depth < 16
             && let Some((base, _)) = &view.extends
             && let Some(base) = self.view_def(base)
         {
-            rules = self.rules_of(base, depth + 1);
+            self.collect_rules(base, shared, depth + 1, rules);
         }
-        rules.extend(&view.rules);
-        rules
+        for rule in if shared { &view.shared } else { &view.rules } {
+            match rule {
+                // What a `global` block named, in its place.
+                ViewRule::Global { name, style, .. } => {
+                    rules.extend(self.globals.get(&(*style, name.clone())).into_iter().flatten());
+                }
+                _ => rules.push(rule),
+            }
+        }
     }
 
     pub fn compute_view(&self, id: &str) -> Option<ComputedView> {
@@ -110,15 +170,18 @@ impl Model {
             overrides: BTreeMap::new(),
             excluded: Vec::new(),
         };
-        let rules = self.rules_of(view, 0);
+        let rules = self.rules_of(view);
         // A sequence reads across, unless the view says otherwise.
         let mut direction = if view.dynamic { Direction::LeftRight } else { Direction::TopBottom };
+        let (mut rank_gap, mut node_gap) = (None, None);
         for rule in &rules {
             match rule {
                 ViewRule::Include(predicates) => predicates.iter().for_each(|p| c.include(p)),
                 ViewRule::Exclude(predicates) => predicates.iter().for_each(|p| c.exclude(p)),
-                ViewRule::AutoLayout(d) => direction = *d,
-                ViewRule::Style { .. } => {}
+                ViewRule::AutoLayout { direction: d, rank_gap: r, node_gap: n } => {
+                    (direction, rank_gap, node_gap) = (*d, *r, *n);
+                }
+                ViewRule::Style { .. } | ViewRule::Global { .. } => {}
             }
         }
 
@@ -155,6 +218,13 @@ impl Model {
                 color: String::new(),
                 border: style.border,
                 opacity: style.opacity,
+                size: style.size,
+                padding: style.padding,
+                text_size: style.text_size,
+                multiple: style.multiple,
+                icon: None,
+                icon_size: style.size,
+                icon_position: style.icon_position,
                 group: false,
                 navigate_to: self
                     .views
@@ -189,6 +259,11 @@ impl Model {
             node.color = style.color;
             node.border = style.border;
             node.opacity = style.opacity;
+            (node.size, node.padding, node.text_size) = (style.size, style.padding, style.text_size);
+            node.multiple = style.multiple;
+            node.icon_size = style.icon_size.unwrap_or(style.size);
+            node.icon_position = style.icon_position;
+            node.icon = style.icon;
             nodes.push(node);
         }
         let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
@@ -239,7 +314,10 @@ impl Model {
             if self.is_ancestor_or_self(source, target) || self.is_ancestor(target, source) {
                 continue;
             }
-            if c.excluded.iter().any(|f| c.filter_matches(f, rel.source, rel.target)) {
+            if c.excluded.iter().any(|(f, cond)| {
+                c.filter_matches(f, rel.source, rel.target)
+                    && cond.as_ref().is_none_or(|cond| c.relation_holds(cond, rel))
+            }) {
                 continue;
             }
             let index = *by_ends.entry((source, target)).or_insert_with(|| {
@@ -294,6 +372,8 @@ impl Model {
             title: view.title.clone(),
             description: view.description.clone(),
             direction,
+            rank_gap,
+            node_gap,
             dynamic: view.dynamic,
             sequence: view.dynamic && view.sequence,
             nodes,
@@ -310,7 +390,7 @@ fn nodes_have_child(ids: &[String], shown: &[usize], model: &Model, id: &str) ->
 
 /// Style keys only; anything unknown was reported when the model was built.
 fn apply_style(model: &Model, props: &StyleProps, style: &mut ElementStyle) {
-    for (key, value, _) in &props.0 {
+    for (key, value, span) in &props.0 {
         match key.as_str() {
             "shape" => {
                 style.shape = match value.as_str() {
@@ -343,6 +423,20 @@ fn apply_style(model: &Model, props: &StyleProps, style: &mut ElementStyle) {
                     style.opacity = (n / 100.0).clamp(0.0, 1.0);
                 }
             }
+            "size" => style.size = Size::parse(value).unwrap_or(style.size),
+            "padding" => style.padding = Size::parse(value).unwrap_or(style.padding),
+            "textSize" => style.text_size = Size::parse(value).unwrap_or(style.text_size),
+            "multiple" => style.multiple = value == "true",
+            // What it is was worked out, and any trouble with it reported,
+            // when the model was built.
+            "icon" if value == "none" => style.icon = None,
+            "icon" => {
+                if let Some(href) = model.icons.get(&(span.file, value.clone())) {
+                    style.icon = Some(href.clone());
+                }
+            }
+            "iconSize" => style.icon_size = Size::parse(value).or(style.icon_size),
+            "iconPosition" => style.icon_position = IconPosition::parse(value).unwrap_or(style.icon_position),
             _ => {}
         }
     }
@@ -365,7 +459,7 @@ impl Computing<'_> {
                 Some(scope) => {
                     let mut out = vec![scope];
                     out.extend(&model.elements[scope].children);
-                    out.extend(self.neighbours(scope, true, true));
+                    out.extend(self.neighbours(scope, true, true, None));
                     out
                 }
                 None => (0..model.elements.len()).filter(|&i| model.elements[i].parent.is_none()).collect(),
@@ -410,10 +504,13 @@ impl Computing<'_> {
     /// not `cloud` and not something deep inside another system. Where part
     /// of that other system is already showing, nothing is added: the
     /// relationship will be drawn to that.
-    fn neighbours(&self, x: usize, incoming: bool, outgoing: bool) -> Vec<usize> {
+    fn neighbours(&self, x: usize, incoming: bool, outgoing: bool, cond: Option<&Condition>) -> Vec<usize> {
         let model = self.model;
         let mut out = Vec::new();
         for rel in &model.relations {
+            if cond.is_some_and(|cond| !self.relation_holds(cond, rel)) {
+                continue;
+            }
             let source_in = model.is_ancestor_or_self(x, rel.source);
             let target_in = model.is_ancestor_or_self(x, rel.target);
             let other = match (source_in, target_in) {
@@ -443,17 +540,44 @@ impl Computing<'_> {
         out
     }
 
+    fn element_facts(&self, i: usize) -> Facts<'_> {
+        let el = &self.model.elements[i];
+        Facts { kind: &el.kind, tags: &el.tags, metadata: &el.metadata }
+    }
+
+    fn element_holds(&self, cond: &Condition, i: usize) -> bool {
+        holds(cond, &|of| (of == Whose::Own).then(|| self.element_facts(i)))
+    }
+
+    fn relation_holds(&self, cond: &Condition, rel: &Relation) -> bool {
+        holds(cond, &|of| {
+            Some(match of {
+                Whose::Own => Facts {
+                    kind: rel.kind.as_deref().unwrap_or_default(),
+                    tags: &rel.tags,
+                    metadata: &rel.metadata,
+                },
+                Whose::Source => self.element_facts(rel.source),
+                Whose::Target => self.element_facts(rel.target),
+            })
+        })
+    }
+
     fn include(&mut self, predicate: &Predicate) {
         match predicate {
-            Predicate::Element { expr, with } => {
+            Predicate::Element { expr, cond, with } => {
                 for i in self.elements(expr) {
+                    if cond.as_ref().is_some_and(|cond| !self.element_holds(cond, i)) {
+                        continue;
+                    }
                     self.visible[i] = true;
                     if !with.0.is_empty() {
                         self.overrides.entry(i).or_default().0.extend(with.0.iter().cloned());
                     }
                 }
             }
-            Predicate::Relation(rel) => {
+            Predicate::Relation(rel, cond) => {
+                let cond = cond.as_ref();
                 let (expr, incoming, outgoing) = match rel {
                     RelExpr::Incoming(e) => (e, true, false),
                     RelExpr::Outgoing(e) => (e, false, true),
@@ -466,6 +590,7 @@ impl Computing<'_> {
                                 let related = self.model.relations.iter().any(|r| {
                                     self.model.is_ancestor_or_self(s, r.source)
                                         && self.model.is_ancestor_or_self(t, r.target)
+                                        && cond.is_none_or(|cond| self.relation_holds(cond, r))
                                 });
                                 if related && s != t {
                                     self.visible[s] = true;
@@ -477,7 +602,7 @@ impl Computing<'_> {
                     }
                 };
                 for x in self.elements(expr) {
-                    let others = self.neighbours(x, incoming, outgoing);
+                    let others = self.neighbours(x, incoming, outgoing, cond);
                     if !others.is_empty() {
                         self.visible[x] = true;
                     }
@@ -491,14 +616,17 @@ impl Computing<'_> {
 
     fn exclude(&mut self, predicate: &Predicate) {
         match predicate {
-            Predicate::Element { expr, .. } => {
+            Predicate::Element { expr, cond, .. } => {
                 for i in 0..self.model.elements.len() {
-                    if self.visible[i] && self.matches(expr, i) {
+                    if self.visible[i]
+                        && self.matches(expr, i)
+                        && cond.as_ref().is_none_or(|cond| self.element_holds(cond, i))
+                    {
                         self.visible[i] = false;
                     }
                 }
             }
-            Predicate::Relation(rel) => {
+            Predicate::Relation(rel, cond) => {
                 let filter = match rel {
                     RelExpr::Incoming(e) => RelFilter::Incoming(self.filter_elements(e)),
                     RelExpr::Outgoing(e) => RelFilter::Outgoing(self.filter_elements(e)),
@@ -507,7 +635,7 @@ impl Computing<'_> {
                         RelFilter::Direct(self.filter_elements(a), self.filter_elements(b))
                     }
                 };
-                self.excluded.push(filter);
+                self.excluded.push((filter, cond.clone()));
             }
         }
     }
@@ -535,7 +663,7 @@ impl Computing<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Severity, Source, load};
+    use crate::{Direction, IconPosition, Severity, Size, Source, load};
 
     const SHOP: &str = "
         specification {
@@ -874,16 +1002,17 @@ views { view v of missing { include * } }"
         let ws = load(&[Source {
             name: "m.c4".into(),
             text: "specification { element box { style { icon tech:rust } } }
-global { style x * { color red } }
+deployment { node n }
 model {
   a = box { icon aws:lambda }
-  b = box { style { size large } }
+  b = box { style { sizing fixed; icon @/b.svg } }
+  c = box { icon ./c.png }
   a -> b
 }
 views {
   /** @likec4-generated(v1) abc */
-  view v { include * where kind is box
-    autoLayout LeftRight 120 110 }
+  view v { include *
+    autoLayout LeftRight 120 110 ortho }
   deployment view d { include * }
 }"
             .into(),
@@ -893,16 +1022,363 @@ views {
         assert_eq!(
             messages,
             [
-                "1:'icon' is not supported yet; it changes nothing in the drawing.",
-                "2:'global' blocks are not supported yet; this one is ignored.",
-                "4:'icon' is not supported yet; it changes nothing in the drawing.",
-                "5:'size' is not supported yet; it changes nothing in the drawing.",
-                "9:Manual layout is not supported yet; this view is laid out automatically.",
-                "10:'where' conditions are not supported yet.",
-                "11:Spacing after autoLayout is not supported yet; the layout picks its own.",
-                "12:deployment views are not supported yet; this one is ignored.",
+                "1:Bundled icons ('tech:rust') are not supported yet; use a URL, or the path of an SVG file like './rust.svg'.",
+                "2:'deployment' blocks are not supported yet; this one is ignored.",
+                "4:Bundled icons ('aws:lambda') are not supported yet; use a URL, or the path of an SVG file like './lambda.svg'.",
+                "5:'sizing fixed' is not supported yet; a box grows to fit its words.",
+                "5:Image aliases ('@/...') are not supported yet; write the path from this file, like './images/logo.svg'.",
+                "6:An icon from a file that is not an SVG ('./c.png') is not supported yet; use an SVG, or a URL.",
+                "10:Manual layout is not supported yet; this view is laid out automatically.",
+                "12:'ortho' routing is not supported yet; lines are drawn as curves.",
+                "13:deployment views are not supported yet; this one is ignored.",
             ]
         );
-        assert_eq!((ws.model.elements.len(), ws.model.relations.len(), ws.model.views.len()), (2, 1, 1));
+        assert_eq!((ws.model.elements.len(), ws.model.relations.len(), ws.model.views.len()), (3, 1, 1));
+    }
+
+    #[test]
+    fn sizes_stacks_and_spacing_reach_the_view() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification {
+  element box { style { size lg; multiple true } }
+  element odd { style { size huge; multiple yes } }
+}
+model {
+  a = box
+  b = box { style { size xsmall; padding xl; textSize small; multiple false } }
+  c = odd
+}
+views {
+  view v { include *, c with { textSize xl }
+    style a { padding sm }
+    autoLayout BottomTop 90 30 }
+  view w { include *
+    autoLayout TopBottom 0 }
+}"
+            .into(),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert_eq!(
+            messages,
+            [
+                "3:'huge' is not a size: use xsmall, small, medium, large or xlarge (or xs, sm, md, lg, xl).",
+                "3:'yes' is not true or false: write 'multiple true'.",
+                "15:'0' is not a distance: use a number of pixels, like 120.",
+            ]
+        );
+        let view = ws.model.compute_view("v").unwrap();
+        assert_eq!(
+            (view.direction, view.rank_gap, view.node_gap),
+            (Direction::BottomTop, Some(90.0), Some(30.0))
+        );
+        let looks: Vec<_> = view.nodes.iter().map(|n| (n.size, n.padding, n.text_size, n.multiple)).collect();
+        assert_eq!(
+            looks,
+            [
+                (Size::Large, Size::Small, Size::Medium, true),
+                (Size::XSmall, Size::XLarge, Size::Small, false),
+                (Size::Medium, Size::Medium, Size::XLarge, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_icon_is_a_url_or_an_svg_among_the_sources() {
+        let model = Source {
+            name: "shop/arch/m.c4".into(),
+            text: "specification {
+  element box { style { icon ./icons/box.svg; iconPosition top } }
+}
+model {
+  a = box
+  b = box { icon https://example.com/b.png; style { iconSize xl; iconPosition right } }
+  c = box { icon none }
+  d = box { icon ../shared.svg }
+  e = box { style { size lg } }
+}
+views {
+  view v { include *, e with { icon ../shared.svg }
+    style c { icon https://example.com/c.svg; iconPosition bottom } }
+}"
+            .into(),
+        };
+        let image = |name: &str, text: &str| Source { name: name.into(), text: text.into() };
+        // Without the images: each is asked for, by where it would be.
+        let ws = load(std::slice::from_ref(&model));
+        assert_eq!(ws.wanted, ["shop/arch/icons/box.svg", "shop/shared.svg"]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert_eq!(
+            messages,
+            [
+                "2:There is no file 'shop/arch/icons/box.svg' for this icon: check the path, or use a URL.",
+                "8:There is no file 'shop/shared.svg' for this icon: check the path, or use a URL.",
+                "12:There is no file 'shop/shared.svg' for this icon: check the path, or use a URL.",
+            ]
+        );
+        // With them, they are just more sources, and not read as a model.
+        let ws = load(&[
+            model,
+            image("shop/arch/icons/box.svg", "<svg/>"),
+            image("shop/shared.svg", "<svg>ab</svg>"),
+        ]);
+        assert!(ws.diagnostics.is_empty() && ws.wanted.is_empty(), "{:?}", ws.diagnostics);
+        let view = ws.model.compute_view("v").unwrap();
+        let icons: Vec<_> = view
+            .nodes
+            .iter()
+            .map(|n| (n.icon.as_deref().unwrap_or("-"), n.icon_size, n.icon_position))
+            .collect();
+        let (boxed, shared) =
+            ("data:image/svg+xml;base64,PHN2Zy8+", "data:image/svg+xml;base64,PHN2Zz5hYjwvc3ZnPg==");
+        assert_eq!(
+            icons,
+            [
+                (boxed, Size::Medium, IconPosition::Top),
+                ("https://example.com/b.png", Size::XLarge, IconPosition::Right),
+                // None of its own, then one from the view's style.
+                ("https://example.com/c.svg", Size::Medium, IconPosition::Bottom),
+                (shared, Size::Medium, IconPosition::Top),
+                // As big as its box, unless it says.
+                (shared, Size::Large, IconPosition::Top),
+            ]
+        );
+    }
+
+    /// The model the `where` and `global` tests ask about.
+    const FLEET: &str = "specification {
+            element system
+            element service
+            element store
+            relationship async
+            tag old
+            tag paid
+        }
+        model {
+            web = service 'Web' { metadata { tier 'front' } }
+            api = service 'API' { #paid; metadata { tier 'back'; owner 'core' } }
+            jobs = service 'Jobs' { #old }
+            db = store 'Database' { #paid }
+            legacy = system 'Legacy' { #old }
+            web -> api 'calls'
+            api -> db 'reads'
+            api -[async]-> jobs 'queues' { #old; metadata { via 'kafka' } }
+            jobs -> legacy 'feeds'
+        }";
+
+    fn fleet(views: &str) -> crate::Workspace {
+        let ws = load(&[Source { name: "fleet.c4".into(), text: format!("{FLEET}\n{views}") }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.to_string()).collect();
+        assert!(messages.is_empty(), "{messages:#?}");
+        ws
+    }
+
+    fn shows(ws: &crate::Workspace, view: &str) -> String {
+        let view = ws.model.compute_view(view).unwrap();
+        view.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn where_keeps_the_elements_a_condition_holds_for() {
+        let ws = fleet(
+            "views {
+                view kind { include * where kind is service }
+                view not_kind { include * where kind is not service }
+                view tag { include * where tag is #paid }
+                view both { include * where kind is service and tag is not #old }
+                view either { include * where kind == store or tag == #old }
+                view grouped { include * where not (kind is service or kind is store) }
+                view order { include * where kind is store or kind is service and tag is #old }
+                view meta { include * where metadata.tier is 'back' }
+                view has_meta { include * where metadata.tier }
+                view no_meta { include * where not metadata.tier }
+                view meta_ne { include * where metadata.tier != 'back' }
+                view out {
+                    include *
+                    exclude * where tag is #old
+                }
+                view with_too { include * where kind is store with { color red } }
+            }",
+        );
+        assert_eq!(shows(&ws, "kind"), "web api jobs");
+        assert_eq!(shows(&ws, "not_kind"), "db legacy");
+        assert_eq!(shows(&ws, "tag"), "api db");
+        assert_eq!(shows(&ws, "both"), "web api");
+        assert_eq!(shows(&ws, "either"), "jobs db legacy");
+        assert_eq!(shows(&ws, "grouped"), "legacy");
+        // `and` binds tighter than `or`.
+        assert_eq!(shows(&ws, "order"), "jobs db");
+        assert_eq!(shows(&ws, "meta"), "api");
+        assert_eq!(shows(&ws, "has_meta"), "web api");
+        assert_eq!(shows(&ws, "no_meta"), "jobs db legacy");
+        // Not that value: whether it has another, or none.
+        assert_eq!(shows(&ws, "meta_ne"), "web jobs db legacy");
+        assert_eq!(shows(&ws, "out"), "web api db");
+        let view = ws.model.compute_view("with_too").unwrap();
+        assert_eq!((view.nodes.len(), view.nodes[0].color.as_str()), (1, "red"));
+    }
+
+    #[test]
+    fn where_after_a_relationship_asks_about_the_relationship() {
+        let ws = fleet(
+            "views {
+                view kind { include api -> where kind is async }
+                view tag { include -> api -> where tag is not #old }
+                view ends { include * -> * where source.kind is service and target.tag is #old }
+                view meta { include api -> * where metadata.via is 'kafka' }
+                view direct { include web -> api where kind is async }
+                view cut {
+                    include *
+                    exclude api -> where kind is async
+                    exclude -> legacy where source.tag is #paid
+                }
+            }",
+        );
+        assert_eq!(shows(&ws, "kind"), "api jobs");
+        assert_eq!(shows(&ws, "tag"), "web api db");
+        assert_eq!(shows(&ws, "ends"), "api jobs legacy");
+        assert_eq!(shows(&ws, "meta"), "api jobs");
+        // Nothing between those two is async.
+        assert_eq!(shows(&ws, "direct"), "");
+        let view = ws.model.compute_view("cut").unwrap();
+        let lines: Vec<&str> = view.edges.iter().map(|e| e.id.as_str()).collect();
+        // The second exclude holds for nothing: jobs is not #paid.
+        assert_eq!(lines, ["web->api", "api->db", "jobs->legacy"]);
+    }
+
+    #[test]
+    fn a_condition_that_cannot_be_read_says_how_to_write_it() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: format!(
+                "{FLEET}
+views {{
+  view a {{ include * where source.kind is service }}
+  view b {{ include * where name is api }}
+  view c {{ include * where kind service }}
+  view d {{ include * where (kind is service }}
+}}"
+            ),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "'source.' and 'target.' ask about a relationship's ends: use them after a relationship, like '-> a where source.kind is x'.",
+                "Expected 'kind', 'tag' or 'metadata' in a 'where' condition, found 'name'.",
+                "Expected 'is' or 'is not', found 'service'.",
+                "Expected ')', found '}'.",
+            ]
+        );
+    }
+
+    #[test]
+    fn global_rules_are_asked_for_by_name() {
+        let ws = fleet(
+            "global {
+                predicateGroup current {
+                    include * where kind is service
+                    exclude * where tag is #old
+                }
+                style quiet * { color muted }
+                styleGroup marked {
+                    style element.tag = #paid { color green }
+                    style db { shape storage }
+                }
+            }
+            views {
+                view one {
+                    global predicate current
+                    include db
+                    global style quiet
+                    global style marked
+                }
+                view two {
+                    include *
+                    global style marked
+                    global style quiet
+                }
+                view three extends one { exclude web }
+            }
+            views {
+                global style quiet
+                view shared { include api, jobs; style jobs { color red } }
+            }",
+        );
+        let looks = |id: &str| {
+            let view = ws.model.compute_view(id).unwrap();
+            view.nodes.iter().map(|n| format!("{}:{}", n.id, n.color)).collect::<Vec<_>>().join(" ")
+        };
+        // In the order asked for: the later rule has the last word.
+        assert_eq!(looks("one"), "web:muted api:green db:green");
+        assert_eq!(looks("two"), "web:muted api:muted jobs:muted db:muted legacy:muted");
+        assert_eq!(looks("three"), "api:green db:green");
+        // Asked for by a whole `views` block: before each view's own rules.
+        assert_eq!(looks("shared"), "api:muted jobs:red");
+        let one = ws.model.compute_view("one").unwrap();
+        assert_eq!(one.nodes.iter().find(|n| n.id == "db").unwrap().shape, crate::Shape::Storage);
+    }
+
+    #[test]
+    fn a_global_that_is_missing_or_given_twice_is_explained() {
+        let ws = load(&[
+            Source {
+                name: "a.c4".into(),
+                text: format!(
+                    "{FLEET}
+global {{
+  style quiet * {{ color muted }}
+  predicateGroup all {{ include *, nothing }}
+  theme x {{ }}
+}}
+views {{
+  view v {{
+    global style loud
+    global predicate quiet
+    global colour quiet
+    include *
+  }}
+}}"
+                ),
+            },
+            Source {
+                name: "b.c4".into(),
+                text: "global { styleGroup quiet { style * { color red } } }".into(),
+            },
+        ]);
+        let messages: Vec<_> =
+            ws.diagnostics.iter().map(|d| format!("{}:{} {}", d.file, d.line, d.message)).collect();
+        assert_eq!(
+            messages,
+            [
+                "a.c4:22 There is no element 'nothing'.",
+                "a.c4:23 Expected 'style', 'styleGroup' or 'predicateGroup', found 'theme'.",
+                "a.c4:27 There is no global style 'loud'. The ones defined are: quiet.",
+                "a.c4:28 There is no global predicate group 'quiet'. The ones defined are: all.",
+                "a.c4:29 Expected 'style' or 'predicate' after 'global', found 'colour'.",
+                "b.c4:1 There is already a global style 'quiet'.",
+            ]
+        );
+        // What could be understood is still there.
+        assert_eq!(shows(&ws, "v"), "web api jobs db legacy");
+    }
+
+    #[test]
+    fn an_import_names_what_is_already_in_the_model() {
+        let ws = load(&[
+            Source { name: "fleet.c4".into(), text: FLEET.into() },
+            Source {
+                name: "mine.c4".into(),
+                text: "import { api, ghost } from 'fleet'
+model { mine = service 'Mine' { -> api 'calls' } }"
+                    .into(),
+            },
+        ]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert_eq!(
+            messages,
+            ["1:There is no element 'ghost' to import: read the files that define it along with these."]
+        );
+        assert_eq!(ws.model.relations.len(), 5);
     }
 }

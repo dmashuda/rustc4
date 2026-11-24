@@ -73,8 +73,9 @@ public final class C4Model {
         generation += 1
     }
 
-    /// Every `.c4` and `.likec4` file under the roots, in a fixed order,
-    /// named by its path below the root it was found under.
+    /// Every `.c4` and `.likec4` file under the roots, and every `.svg`
+    /// (an icon's image, which the model takes as one more source), in a
+    /// fixed order, named by its path below the root it was found under.
     static func sourceFiles(in roots: [URL]) -> [(url: URL, name: String, modified: Date)] {
         let manager = FileManager.default
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
@@ -94,7 +95,7 @@ public final class C4Model {
                 at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants])
             var inside: [(url: URL, name: String, modified: Date)] = []
             while let url = walk?.nextObject() as? URL {
-                guard ["c4", "likec4"].contains(url.pathExtension) else { continue }
+                guard ["c4", "likec4", "svg"].contains(url.pathExtension) else { continue }
                 let path = url.standardizedFileURL.path
                 let name = path.hasPrefix(base + "/") ? String(path.dropFirst(base.count + 1)) : url.lastPathComponent
                 inside.append((url, name, modified(url)))

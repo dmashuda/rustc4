@@ -21,9 +21,10 @@ After every change, `bazel test //...` must pass, Rust must be rustfmt-clean,
 and clippy must be quiet.
 
 A layout change cannot be judged from tests alone: export the examples as
-PNG and look at them. (`examples` holds two separate models, so that command
-reports the `customer` and `index` both define and exits 1; every view is
-still written.)
+PNG and look at them. (`examples` holds separate models, so that command
+reports what more than one of them defines and exits 1; every view is
+still written. `examples/delivery` is the one with icons, sizes and
+stacks.)
 
 ## Architecture rules
 
@@ -69,6 +70,11 @@ One Rust core, thin bindings, renderers that only draw.
   stands by), a `Lifeline` down from each, one level line per step.
   Lifelines are in the `Diagram`, drawn behind everything, and are not
   tapped or faded.
+- **An icon is a URL in the `Diagram`**, with the rectangle to draw it
+  in: `https:` for a renderer to fetch, or `data:` holding an SVG file the
+  source named. Such a file is one more `Source` (named `.svg`, not read
+  as a model); `Workspace::wanted` lists those not given, for whoever
+  reads files to read and give. The core never touches the file system.
 - **Ids are API.** `view.<id>`, `node.<fqn>`, `open.<fqn>`,
   `edge.<source>-><target>` (a step of a dynamic view:
   `edge.<source>-><target>#<step>`), `back`, `canvas`, `details.close`, `file.<n>`,
