@@ -7,7 +7,7 @@ use c4_model::{Source, Workspace};
 use c4_render::SvgOptions;
 
 /// The viewer, as built by //apps/web:viewer.
-const VIEWER: [(&str, &[u8]); 4] = [
+pub(crate) const VIEWER: [(&str, &[u8]); 4] = [
     ("index.html", include_bytes!(concat!(env!("VIEWER_DIR"), "/index.html"))),
     ("style.css", include_bytes!(concat!(env!("VIEWER_DIR"), "/style.css"))),
     ("main.js", include_bytes!(concat!(env!("VIEWER_DIR"), "/main.js"))),
@@ -63,6 +63,13 @@ pub fn unbundle(bytes: &[u8]) -> Result<Vec<Source>, String> {
         .collect()
 }
 
+/// One view as the site has it, if there is such a view.
+pub(crate) fn svg(ws: &Workspace, id: &str, legend: bool) -> Option<String> {
+    let view = ws.model.compute_view(id)?;
+    let diagram = c4_layout::layout_with(&view, &ws.model.colors, c4_layout::Options { legend });
+    Some(c4_render::svg(&diagram, &SvgOptions::default()))
+}
+
 /// Writes the site into `dir`; returns how many files. `legend`: whether
 /// the SVGs have one (the viewer shows and hides its own).
 pub fn write(dir: &Path, sources: &[Source], ws: &Workspace, legend: bool) -> Result<usize, String> {
@@ -83,9 +90,8 @@ pub fn write(dir: &Path, sources: &[Source], ws: &Workspace, legend: bool) -> Re
     put("model.json", &bundle(sources)?)?;
     count += 1;
     for id in ws.model.view_ids() {
-        let view = ws.model.compute_view(id).expect("listed views exist");
-        let diagram = c4_layout::layout_with(&view, &ws.model.colors, c4_layout::Options { legend });
-        put(&format!("views/{id}.svg"), c4_render::svg(&diagram, &SvgOptions::default()).as_bytes())?;
+        let drawn = svg(ws, id, legend).expect("listed views exist");
+        put(&format!("views/{id}.svg"), drawn.as_bytes())?;
         count += 1;
     }
     Ok(count)

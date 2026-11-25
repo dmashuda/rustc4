@@ -50,7 +50,9 @@ type Source = { name: string; text: string };
 
 // ---------------------------------------------------------------- sources --
 // A published site has its model beside the page (model.json, written by
-// `rustc4 build`) and only shows it. Without one this is the playground:
+// `rustc4 build`) and only shows it. `rustc4 serve` says with the model
+// where to listen for its files changing (`changes`), and the page then
+// reads it again. Without one this is the playground:
 // the source is edited here and kept in the browser.
 
 const STORE_KEY = "rustc4.playground.v1";
@@ -75,18 +77,27 @@ function store(sources: Source[]) {
   }
 }
 
-async function loadSources(): Promise<{ sources: Source[]; editable: boolean }> {
+/// The model beside the page, if there is one.
+async function published(): Promise<{ sources: Source[]; changes: string | null } | null> {
   try {
-    const response = await fetch("model.json");
+    const response = await fetch("model.json", { cache: "no-store" });
     if (response.ok) {
       const model = await response.json();
-      if (Array.isArray(model?.sources)) return { sources: model.sources, editable: false };
+      if (Array.isArray(model?.sources)) {
+        return { sources: model.sources, changes: response.headers.get("x-rustc4-changes") };
+      }
     }
   } catch {
-    // No model here: the playground.
+    // No model here.
   }
+  return null;
+}
+
+async function loadSources(): Promise<{ sources: Source[]; editable: boolean; changes: string | null }> {
+  const model = await published();
+  if (model) return { ...model, editable: false };
   const saved = stored();
-  if (saved) return { sources: saved, editable: true };
+  if (saved) return { sources: saved, editable: true, changes: null };
   let text = "";
   try {
     const response = await fetch("example.c4");
@@ -94,10 +105,10 @@ async function loadSources(): Promise<{ sources: Source[]; editable: boolean }> 
   } catch {
     // Start empty; the screen says what to type.
   }
-  return { sources: [{ name: "model.c4", text }], editable: true };
+  return { sources: [{ name: "model.c4", text }], editable: true, changes: null };
 }
 
-const { sources, editable } = await loadSources();
+const { sources, editable, changes } = await loadSources();
 const ui = new C4Ui(JSON.stringify(sources), editable);
 
 // -------------------------------------------------------------------- dom --
@@ -475,3 +486,12 @@ window.addEventListener("hashchange", () => {
 
 if (fromAddress()) tap(`view.${fromAddress()}`);
 else draw(JSON.parse(ui.screen()));
+
+// The files changed where the model is served from: show them as they are
+// now. The browser listens again by itself if the server goes and returns.
+if (changes) {
+  new EventSource(changes).onmessage = async () => {
+    const model = await published();
+    if (model) draw(JSON.parse(ui.setSources(JSON.stringify(model.sources), false)));
+  };
+}

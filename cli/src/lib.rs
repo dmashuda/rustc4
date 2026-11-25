@@ -9,6 +9,7 @@ use c4_render::SvgOptions;
 
 mod mcp;
 mod png;
+mod serve;
 mod site;
 
 const USAGE: &str = "rustc4: C4-style architecture diagrams as code
@@ -20,6 +21,8 @@ Usage:
                                                 Write each view to a file
   rustc4 build  <path>... [-o <dir>]            Write a static site: the viewer,
                                                 the model, and every view as SVG
+  rustc4 serve  <path>... [--port <n>]          Show the model in a browser, and
+                                                again whenever a file changes
   rustc4 bundle <path>... -o <file.json>        Gather a model into one file
   rustc4 query  <path>... -- <question>         Ask about a model (see below)
   rustc4 mcp    <path>...                       Serve the same questions to a
@@ -42,6 +45,7 @@ Options:
   --view <id>           Only this view (may be repeated)
   --background <color>  Paint behind the diagram, e.g. '#ffffff' (default: transparent)
   --scale <n>           PNG pixels per diagram pixel (default: 2)
+  --port <n>            Where serve listens (default: 8080; 0 for any free port)
   --no-legend           Leave out the legend: over each diagram, what its
                         shapes and lines mean, for those whose kind has a
                         'notation' in the specification
@@ -65,6 +69,7 @@ struct Options {
     background: Option<String>,
     scale: f32,
     legend: bool,
+    port: u16,
 }
 
 fn options(args: &[String]) -> Result<Options, String> {
@@ -75,6 +80,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         background: None,
         scale: 2.0,
         legend: true,
+        port: 8080,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -93,6 +99,11 @@ fn options(args: &[String]) -> Result<Options, String> {
                     .ok()
                     .filter(|s| *s > 0.0 && *s <= 8.0)
                     .ok_or(format!("'{text}' is not a scale: use a number up to 8"))?;
+            }
+            "--port" => {
+                let text = value("--port")?;
+                o.port =
+                    text.parse().map_err(|_| format!("'{text}' is not a port: use a number up to 65535"))?;
             }
             flag if flag.starts_with('-') => return Err(format!("unknown option '{flag}'")),
             path => o.paths.push(PathBuf::from(path)),
@@ -298,6 +309,10 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
             );
             Ok(i32::from(failed))
         }
+        "serve" => {
+            let o = options(&args[1..])?;
+            serve::Server::bind(o.paths, o.port, o.legend)?.run(out, err)
+        }
         "bundle" => {
             let o = options(&args[1..])?;
             if o.out.extension().is_none_or(|e| e != "json") {
@@ -363,7 +378,7 @@ mod tests {
     }
 
     /// A fresh directory under the test's own temporary one.
-    fn scratch(name: &str) -> PathBuf {
+    pub(crate) fn scratch(name: &str) -> PathBuf {
         let dir = PathBuf::from(
             std::env::var("TEST_TMPDIR").unwrap_or_else(|_| std::env::temp_dir().display().to_string()),
         )
