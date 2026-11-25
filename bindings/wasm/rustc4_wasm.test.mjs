@@ -66,6 +66,6 @@ screen = JSON.parse(empty.screen());
 assert.equal(screen.views.length, 0);
 assert.equal(empty.svg(undefined), "");
 assert.equal(screen.editor, null);
-assert.match(screen.empty, /^Nothing to draw yet/);
+assert.match(screen.empty, /^No model is open/);
 
 console.log("ok");

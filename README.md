@@ -129,10 +129,12 @@ the closer view of it, drag to move, pinch or ctrl-scroll to zoom. The address
 bar follows the view, so a link opens on it. The playground has the source
 beside the diagram and redraws as you type.
 
-The macOS app is the same viewer, native. It opens on the example with its
-source to edit; **Open…** (⌘O), dropping a folder on the window, or a path on
-the command line shows a model from disk instead, and the window then follows
-the files as you save them from whatever editor you use.
+The macOS app is the same viewer, native, and like `rustc4 serve` it only
+shows: the source is written in whatever editor you use, and the window
+follows the files as you save them. **Open…** (⌘O), dropping a file or a
+folder on the window, or a path on the command line
+(`bazel run //apps/macos:rustc4 -- examples/shop.c4`) says which; started
+without one it opens what it was showing last time.
 
 An icon's SVG file, and the file of a `descriptionFile`, are read along
 with the sources that name them, and go into a bundle and a site with them. An icon from a URL is fetched by whatever

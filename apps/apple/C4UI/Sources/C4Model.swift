@@ -5,30 +5,34 @@ import Observation
 /// Holds the Rust `C4Ui` and its latest `Screen` for SwiftUI.
 ///
 /// Nothing here knows what is on the screen: views draw `screen` and call
-/// `tap` / `edit` with what the user did. What is here is what only the
-/// platform can do: reading a model's files from disk, and noticing when
-/// they change.
+/// `tap` with what the user did. What is here is what only the platform can
+/// do: reading a model's files from disk, noticing when they change, and
+/// remembering which they were. The files are written in an editor; this
+/// only shows them.
 @MainActor
 @Observable
 public final class C4Model {
     public private(set) var screen: Screen
-    /// Goes up whenever the sources are replaced from outside (a model is
-    /// opened, a file changes on disk): an editor showing the old text
-    /// must take the new.
-    public private(set) var generation = 0
+    /// What was opened: files and directories, re-read when they change.
+    /// Empty until something is.
+    public private(set) var roots: [URL] = []
 
     private let ui: C4Ui
-    /// What was opened: files and directories, re-read when they change.
-    @ObservationIgnored private var roots: [URL] = []
+    /// Where what was opened is kept for the next launch, if anywhere.
+    @ObservationIgnored private let defaults: UserDefaults?
+    private static let rememberedKey = "openedPaths"
+    /// How often the files are looked at: as `rustc4 serve` does.
+    private static let poll: TimeInterval = 0.25
     @ObservationIgnored private var fingerprint = ""
     /// What the model named besides its own files, when it was last read:
     /// an icon's image, a description's text. Watched like the rest.
     @ObservationIgnored private var named: [URL] = []
     @ObservationIgnored private var timer: Timer?
 
-    /// Opens on the example model, with its source there to edit.
-    public init(ui: C4Ui = .example()) {
+    /// Opens on nothing, saying so, until `open` or `reopen`.
+    public init(ui: C4Ui = C4Ui(sources: [], editable: false), remembering defaults: UserDefaults? = nil) {
         self.ui = ui
+        self.defaults = defaults
         screen = ui.screen()
     }
 
@@ -36,10 +40,6 @@ public final class C4Model {
 
     public func tap(_ id: String) {
         screen = ui.tap(id: id)
-    }
-
-    public func edit(file: UInt32, text: String) {
-        screen = ui.setSource(file: file, text: text)
     }
 
     /// The showing diagram as SVG text, for saving.
@@ -64,27 +64,40 @@ public final class C4Model {
     /// it as they change: edit in any editor, and the window follows.
     public func open(_ urls: [URL], watching: Bool = true) {
         roots = urls
+        defaults?.set(urls.map(\.path), forKey: Self.rememberedKey)
         fingerprint = ""
         reloadIfChanged()
         timer?.invalidate()
         guard watching else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: Self.poll, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reloadIfChanged() }
         }
     }
 
-    /// Re-reads the opened files if any was added, removed or saved.
-    public func reloadIfChanged() {
-        guard !roots.isEmpty else { return }
+    /// Opens what was open when the app was last used, if it is still there.
+    public func reopen(watching: Bool = true) {
+        let urls = (defaults?.stringArray(forKey: Self.rememberedKey) ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0) }
+            .map { URL(fileURLWithPath: $0) }
+        if !urls.isEmpty { open(urls, watching: watching) }
+    }
+
+    /// Re-reads the opened files if any was added, removed or saved; says
+    /// whether it did.
+    @discardableResult
+    public func reloadIfChanged() -> Bool {
+        guard !roots.isEmpty else { return false }
         let files = Self.sourceFiles(in: roots)
         let stamp = { (urls: [URL]) in
             urls.map { url in
                 // Asked of the file each time: a URL remembers what it was told.
-                let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-                return "\(url.path)@\((modified ?? .distantPast).timeIntervalSince1970)"
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                let modified = attributes?[.modificationDate] as? Date
+                let size = attributes?[.size] as? UInt64
+                return "\(url.path)@\((modified ?? .distantPast).timeIntervalSince1970)+\(size ?? 0)"
             }.joined(separator: "\n")
         }
-        guard stamp(files.map(\.url) + named) != fingerprint else { return }
+        guard stamp(files.map(\.url) + named) != fingerprint else { return false }
         var sources = files.compactMap { file in
             (try? String(contentsOf: file.url, encoding: .utf8)).map { Source(name: file.name, text: $0) }
         }
@@ -100,7 +113,7 @@ public final class C4Model {
         }
         if !named.isEmpty { screen = ui.setSources(sources: sources, editable: false) }
         fingerprint = stamp(files.map(\.url) + named)
-        generation += 1
+        return true
     }
 
     /// The file a source means by this name: names are paths below a root
@@ -137,6 +150,12 @@ public final class C4Model {
                 at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants])
             var inside: [(url: URL, name: String, modified: Date)] = []
             while let url = walk?.nextObject() as? URL {
+                // As the command line does: nobody keeps a model in there,
+                // and it is a great deal to look through four times a second.
+                if url.lastPathComponent == "node_modules" {
+                    walk?.skipDescendants()
+                    continue
+                }
                 guard ["c4", "likec4"].contains(url.pathExtension) else { continue }
                 let path = url.standardizedFileURL.path
                 let name = path.hasPrefix(base + "/") ? String(path.dropFirst(base.count + 1)) : url.lastPathComponent

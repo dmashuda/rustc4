@@ -438,6 +438,12 @@ impl C4Ui {
             (Some(d), _) if d.nodes.is_empty() => "This view includes nothing yet. Add a line like: include *".to_string(),
             (Some(_), _) => String::new(),
             (None, _) if errors > 0 => "Nothing to draw until the problems in the source are fixed.".to_string(),
+            // Nothing was given and nothing can be typed: a viewer waiting
+            // to be shown a model.
+            (None, _) if !self.editable && self.sources.is_empty() => {
+                "No model is open. Open a .c4 file, or a folder of them: this follows it as it is edited."
+                    .to_string()
+            }
             (None, _) => "Nothing to draw yet. Describe a model: specification { element system } model { a = system 'A' }".to_string(),
         };
         let exports = match &self.diagram {
@@ -1066,6 +1072,10 @@ mod tests {
         );
         assert!(screen.editor.is_none() && screen.back.is_none());
         assert_eq!(screen.controls.open, "Open…");
+        // A viewer shown nothing says how to be shown something.
+        let waiting = C4Ui::new(Vec::new(), false).screen();
+        assert!(waiting.empty.starts_with("No model is open."), "{}", waiting.empty);
+        assert!(C4Ui::new(Vec::new(), true).screen().empty.starts_with("Nothing to draw yet."));
         // The same again changes nothing, selection included.
         ui.tap("node.a");
         assert_eq!(ui.set_sources(vec![other], false).selected, "node.a");

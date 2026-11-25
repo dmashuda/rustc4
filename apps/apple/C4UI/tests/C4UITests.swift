@@ -16,15 +16,43 @@ final class C4UITests: XCTestCase {
         return url
     }
 
-    func testOpensOnTheExampleAndTaps() {
+    /// The example model: something to click on and draw.
+    private func example() -> C4Model { C4Model(ui: .example()) }
+
+    func testOpensOnNothingAndSaysSo() {
         let model = C4Model()
-        XCTAssertEqual(model.screen.title, "Landscape")
-        XCTAssertNotNil(model.screen.editor)
-        model.tap("open.shop")
-        XCTAssertEqual(model.screen.view, "shop")
-        model.edit(file: 0, text: "model {")
-        XCTAssertFalse(model.screen.problems.isEmpty)
+        XCTAssertNil(model.screen.diagram)
+        XCTAssertNil(model.screen.editor, "the source is written elsewhere")
+        XCTAssertTrue(model.screen.empty.hasPrefix("No model is open."), model.screen.empty)
+        XCTAssertTrue(model.roots.isEmpty)
         XCTAssertFalse(model.svg().hasPrefix("<svg"))
+        XCTAssertFalse(model.reloadIfChanged())
+    }
+
+    func testWhatWasOpenIsOpenedAgain() throws {
+        let suite = "c4ui-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let folder = try temporaryDirectory()
+        try "specification { element box } model { a = box 'A' }"
+            .write(to: folder.appendingPathComponent("m.c4"), atomically: true, encoding: .utf8)
+
+        // Nothing remembered: nothing opened.
+        let first = C4Model(remembering: defaults)
+        first.reopen(watching: false)
+        XCTAssertTrue(first.roots.isEmpty)
+        first.open([folder], watching: false)
+
+        let next = C4Model(remembering: defaults)
+        next.reopen(watching: false)
+        XCTAssertEqual(next.roots.map(\.path), [folder.path])
+        XCTAssertEqual(next.screen.status, "1 element · 0 relationships · 1 view")
+
+        // Gone since: back to nothing, not to an error.
+        try FileManager.default.removeItem(at: folder)
+        let later = C4Model(remembering: defaults)
+        later.reopen(watching: false)
+        XCTAssertTrue(later.roots.isEmpty)
     }
 
     func testFilesTheModelNamesAreReadWithIt() throws {
@@ -138,6 +166,9 @@ final class C4UITests: XCTestCase {
         let modelFile = folder.appendingPathComponent("sub/model.likec4")
         try "model { a = box 'A' }".write(to: modelFile, atomically: true, encoding: .utf8)
         try "not a model".write(to: folder.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: folder.appendingPathComponent("node_modules/dep"), withIntermediateDirectories: true)
+        try "model {".write(to: folder.appendingPathComponent("node_modules/dep/theirs.c4"), atomically: true, encoding: .utf8)
 
         XCTAssertEqual(C4Model.sourceFiles(in: [folder]).map(\.name), ["spec.c4", "sub/model.likec4"])
 
@@ -145,18 +176,15 @@ final class C4UITests: XCTestCase {
         model.open([folder], watching: false)
         XCTAssertEqual(model.screen.status, "1 element · 0 relationships · 1 view")
         XCTAssertNil(model.screen.editor, "a model on disk is edited in an editor")
-        XCTAssertEqual(model.generation, 1)
 
         // Nothing changed: nothing is read again.
-        model.reloadIfChanged()
-        XCTAssertEqual(model.generation, 1)
+        XCTAssertFalse(model.reloadIfChanged())
 
         // Saved with something new in it.
         try "model { a = box 'A'; b = box 'B'; a -> b }".write(to: modelFile, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: modelFile.path)
-        model.reloadIfChanged()
+        XCTAssertTrue(model.reloadIfChanged())
         XCTAssertEqual(model.screen.status, "2 elements · 1 relationship · 1 view")
-        XCTAssertEqual(model.generation, 2)
 
         // A single file works too.
         model.open([modelFile], watching: false)
@@ -164,7 +192,7 @@ final class C4UITests: XCTestCase {
     }
 
     func testAClickFindsWhatIsUnderIt() throws {
-        let model = C4Model()
+        let model = example()
         model.tap("view.shop")
         let diagram = try XCTUnwrap(model.screen.diagram)
         let node = { (id: String) in diagram.nodes.first { $0.id == id }! }
@@ -188,7 +216,7 @@ final class C4UITests: XCTestCase {
     }
 
     func testTheCameraFitsAndZoomsAroundAPoint() throws {
-        let diagram = try XCTUnwrap(C4Model().screen.diagram)
+        let diagram = try XCTUnwrap(example().screen.diagram)
         var camera = Camera()
         camera.fit(diagram, in: CGSize(width: diagram.width / 2 + 32, height: 4000))
         XCTAssertEqual(camera.scale, 0.5, accuracy: 0.001)
@@ -213,7 +241,7 @@ final class C4UITests: XCTestCase {
     }
 
     func testTheDiagramBecomesAPng() throws {
-        let diagram = try XCTUnwrap(C4Model().screen.diagram)
+        let diagram = try XCTUnwrap(example().screen.diagram)
         let data = try XCTUnwrap(C4View.png(of: diagram, scale: 1))
         XCTAssertEqual(Array(data.prefix(4)), [0x89, 0x50, 0x4e, 0x47])
         let image = try XCTUnwrap(NSBitmapImageRep(data: data))
@@ -232,10 +260,7 @@ final class C4UITests: XCTestCase {
 
     /// The real window's content, drawn offscreen. A picture of it is left
     /// with the test's outputs (bazel-testlogs/.../test.outputs), to look at.
-    func testTheWindowDraws() throws {
-        let model = C4Model()
-        model.tap("view.shop")
-        model.tap("node.shop.api")
+    private func picture(of model: C4Model, named name: String) throws {
         let host = NSHostingView(rootView: C4View(model: model))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
@@ -256,9 +281,18 @@ final class C4UITests: XCTestCase {
         if let outputs = ProcessInfo.processInfo.environment["TEST_UNDECLARED_OUTPUTS_DIR"],
             let png = image.representation(using: .png, properties: [:])
         {
-            try png.write(to: URL(fileURLWithPath: outputs).appendingPathComponent("window.png"))
+            try png.write(to: URL(fileURLWithPath: outputs).appendingPathComponent(name))
         }
+    }
+
+    func testTheWindowDraws() throws {
+        let model = example()
+        model.tap("view.shop")
+        model.tap("node.shop.api")
+        try picture(of: model, named: "window.png")
         // The panel says what was selected, in the screen's words.
         XCTAssertEqual(model.screen.details?.title, "API")
+        // And with nothing open: the words for that, and the way to open.
+        try picture(of: C4Model(), named: "window-empty.png")
     }
 }
