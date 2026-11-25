@@ -55,6 +55,18 @@ final class C4UITests: XCTestCase {
         XCTAssertTrue(later.roots.isEmpty)
     }
 
+    func testAnIconIsAnImageThatIsNotText() throws {
+        let folder = try temporaryDirectory()
+        try "specification { element box } model { b = box 'B' { icon ./b.png } }"
+            .write(to: folder.appendingPathComponent("m.c4"), atomically: true, encoding: .utf8)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: folder.appendingPathComponent("b.png"))
+
+        let model = C4Model()
+        model.open([folder], watching: false)
+        XCTAssertEqual(model.screen.problems.map(\.text), [])
+        XCTAssertEqual(model.screen.diagram?.nodes.first?.icon?.href, "data:image/png;base64,iVBORw==")
+    }
+
     func testFilesTheModelNamesAreReadWithIt() throws {
         let folder = try temporaryDirectory()
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("docs"), withIntermediateDirectories: true)

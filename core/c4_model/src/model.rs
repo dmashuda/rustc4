@@ -474,7 +474,39 @@ struct Builder<'a> {
 /// description's text), rather than part of the model.
 fn is_image(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name.ends_with(".svg") || is_text(&name)
+    name.ends_with(".svg") || raster(&name).is_some() || is_text(&name)
+}
+
+/// What kind of image a file that is not text is, by its name: the ones an
+/// icon may be besides an SVG.
+fn raster(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    [
+        (".png", "image/png"),
+        (".jpg", "image/jpeg"),
+        (".jpeg", "image/jpeg"),
+        (".gif", "image/gif"),
+        (".webp", "image/webp"),
+    ]
+    .iter()
+    .find(|(ext, _)| name.ends_with(ext))
+    .map(|(_, kind)| *kind)
+}
+
+/// Above this many characters of base64 an icon's image is said to be large:
+/// it is in the diagram once for every box that has it.
+const LARGE_IMAGE: usize = 350_000;
+
+impl Source {
+    /// A file as a source, for whoever reads files: its text, or for an
+    /// image that is not text (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`)
+    /// its bytes in base64. `None` for text that is not UTF-8.
+    pub fn from_bytes(name: impl Into<String>, bytes: &[u8]) -> Option<Source> {
+        let name = name.into();
+        let text =
+            if raster(&name).is_some() { base64(bytes) } else { String::from_utf8(bytes.to_vec()).ok()? };
+        Some(Source { name, text })
+    }
 }
 
 /// What a `descriptionFile` may be.
@@ -501,9 +533,13 @@ fn beside(source: &str, path: &str) -> String {
 
 /// An SVG's text as a URL that holds it.
 fn data_url(svg: &str) -> String {
+    format!("data:image/svg+xml;base64,{}", base64(svg.as_bytes()))
+}
+
+fn base64(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::from("data:image/svg+xml;base64,");
-    for chunk in svg.as_bytes().chunks(3) {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
         let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
         for k in 0..4 {
             out.push(if k <= chunk.len() { DIGITS[(n >> (18 - 6 * k)) as usize & 63] as char } else { '=' });
@@ -512,8 +548,10 @@ fn data_url(svg: &str) -> String {
     out
 }
 
-/// Reads every source into one model. A source named `.svg` is an image
-/// for the others' icons; the rest are the model's files.
+/// Reads every source into one model. A source named as an image (`.svg`,
+/// or `.png` and the like with its bytes in base64: [`Source::from_bytes`])
+/// is one for the others' icons, one named `.md` or `.txt` a description's
+/// text; the rest are the model's files.
 pub fn load(sources: &[Source]) -> Workspace {
     let mut b = Builder {
         sources,
@@ -829,18 +867,33 @@ impl Builder<'_> {
             );
             return None;
         } else if value.starts_with("./") || value.starts_with("../") {
-            if !lower.ends_with(".svg") {
+            let kind = raster(value);
+            if kind.is_none() && !lower.ends_with(".svg") {
                 self.report(
                     span,
                     Severity::Warning,
-                    format!("An icon from a file that is not an SVG ('{value}') is not supported yet; use an SVG, or a URL."),
+                    format!("An icon from a file like '{value}' is not supported yet; use an SVG, PNG, JPEG, GIF or WebP file, or a URL."),
                 );
                 return None;
             }
             let name = beside(source, value);
-            match self.sources.iter().find(|s| s.name == name) {
-                Some(image) => data_url(&image.text),
-                None => {
+            match (self.sources.iter().find(|s| s.name == name), kind) {
+                (Some(image), None) => data_url(&image.text),
+                // Whoever read the file gave its bytes in base64.
+                (Some(image), Some(kind)) => {
+                    if image.text.len() > LARGE_IMAGE {
+                        self.report(
+                            span,
+                            Severity::Warning,
+                            format!(
+                                "The image '{name}' is large ({} KB) and every box with this icon carries it: use a smaller one, or an SVG.",
+                                image.text.len() / 4 * 3 / 1024
+                            ),
+                        );
+                    }
+                    format!("data:{kind};base64,{}", image.text)
+                }
+                (None, _) => {
                     if !self.wanted.contains(&name) {
                         self.wanted.push(name.clone());
                     }
@@ -855,7 +908,7 @@ impl Builder<'_> {
             self.report(
                 span,
                 Severity::Warning,
-                format!("Bundled icons ('{value}') are not supported yet; use a URL, or the path of an SVG file like './{}.svg'.", value.rsplit(':').next().unwrap_or(value)),
+                format!("Bundled icons ('{value}') are not supported yet; use a URL, or the path of an image file like './{}.svg'.", value.rsplit(':').next().unwrap_or(value)),
             );
             return None;
         };
@@ -973,10 +1026,15 @@ impl Builder<'_> {
                         format!("'{value}' is not a side: use left, right, top or bottom."),
                     ),
                 },
-                // Only the icons LikeC4 bundles take a color, and those are
-                // reported where they are asked for.
+                // Only some of the icons LikeC4 bundles take a color.
                 "iconColor" => {
-                    self.color(value, *span);
+                    if self.color(value, *span).is_some() {
+                        self.report(
+                            *span,
+                            Severity::Warning,
+                            "'iconColor' is not supported yet; an icon is drawn in its own colors.".into(),
+                        );
+                    }
                 }
                 "sizing" => match value.as_str() {
                     "auto" => {}

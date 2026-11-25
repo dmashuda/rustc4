@@ -1087,9 +1087,9 @@ views { view v of missing { include * } }"
             text: "specification { element box { style { icon tech:rust } } }
 deployment { node n }
 model {
-  a = box { icon aws:lambda }
+  a = box { icon aws:lambda; style { iconColor red } }
   b = box { style { sizing fixed; icon @/b.svg } }
-  c = box { icon ./c.png }
+  c = box { icon ./c.bmp }
   a -> b
 }
 views {
@@ -1105,12 +1105,13 @@ views {
         assert_eq!(
             messages,
             [
-                "1:Bundled icons ('tech:rust') are not supported yet; use a URL, or the path of an SVG file like './rust.svg'.",
+                "1:Bundled icons ('tech:rust') are not supported yet; use a URL, or the path of an image file like './rust.svg'.",
                 "2:'deployment' blocks are not supported yet; this one is ignored.",
-                "4:Bundled icons ('aws:lambda') are not supported yet; use a URL, or the path of an SVG file like './lambda.svg'.",
+                "4:Bundled icons ('aws:lambda') are not supported yet; use a URL, or the path of an image file like './lambda.svg'.",
+                "4:'iconColor' is not supported yet; an icon is drawn in its own colors.",
                 "5:'sizing fixed' is not supported yet; a box grows to fit its words.",
                 "5:Image aliases ('@/...') are not supported yet; write the path from this file, like './images/logo.svg'.",
-                "6:An icon from a file that is not an SVG ('./c.png') is not supported yet; use an SVG, or a URL.",
+                "6:An icon from a file like './c.bmp' is not supported yet; use an SVG, PNG, JPEG, GIF or WebP file, or a URL.",
                 "10:Manual layout is not supported yet; this view is laid out automatically.",
                 "12:'ortho' routing is not supported yet; lines are drawn as curves.",
                 "13:deployment views are not supported yet; this one is ignored.",
@@ -1265,6 +1266,33 @@ views {
                 (shared, Size::Large, IconPosition::Top),
             ]
         );
+    }
+
+    #[test]
+    fn an_icon_is_an_image_that_is_not_text() {
+        let model = Source {
+            name: "shop/m.c4".into(),
+            text: "specification { element box }
+model {
+  a = box { icon ./logo.png }
+  b = box { icon ./photo.JPG }
+}"
+            .into(),
+        };
+        let ws = load(std::slice::from_ref(&model));
+        assert_eq!(ws.wanted, ["shop/logo.png", "shop/photo.JPG"]);
+        assert_eq!(ws.diagnostics.len(), 2);
+
+        // Whoever reads files gives an image's bytes in base64.
+        let png = Source::from_bytes("shop/logo.png", &[0x89, b'P', b'N', b'G']).unwrap();
+        assert_eq!(png.text, "iVBORw==");
+        assert_eq!(Source::from_bytes("a.c4", b"model {}").unwrap().text, "model {}");
+        assert!(Source::from_bytes("a.c4", &[0xff]).is_none());
+        let ws = load(&[model, png, Source::from_bytes("shop/photo.JPG", b"jpg").unwrap()]);
+        assert!(ws.wanted.is_empty() && ws.diagnostics.is_empty(), "{:?}", ws.diagnostics);
+        let icon = |name: &str| ws.model.element(name).unwrap().style.icon.clone();
+        assert_eq!(icon("a").as_deref(), Some("data:image/png;base64,iVBORw=="));
+        assert_eq!(icon("b").as_deref(), Some("data:image/jpeg;base64,anBn"));
     }
 
     #[test]
