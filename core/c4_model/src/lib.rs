@@ -11,12 +11,12 @@ mod model;
 mod parser;
 mod view;
 
-pub use ast::Direction;
+pub use ast::{Direction, Rank};
 pub use model::{
     Arrow, Diagnostic, Element, ElementStyle, IconPosition, Line, Model, Origin, Relation, RelationStyle,
     Severity, Shape, Size, Source, View, Workspace, load,
 };
-pub use view::{ComputedView, ViewEdge, ViewNode};
+pub use view::{ComputedView, ViewEdge, ViewNode, ViewRank};
 
 /// `#rrggbb` or `#rgb` as red, green and blue.
 pub fn parse_hex(value: &str) -> Option<(u8, u8, u8)> {

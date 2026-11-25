@@ -1,12 +1,12 @@
 // A parcel delivery company: an example of the parts of the language the
 // shop does not use. Icons, sizes and stacks; `where`; `global` rules; how
-// far apart `autoLayout` puts things; a legend.
+// far apart `autoLayout` puts things; `rank`; a legend.
 //
 //   bazel run //cli -- export png examples/delivery -o out --background '#fff'
 //   bazel run //apps/macos:rustc4 -- examples/delivery
 
 specification {
-  // `notation` is what the legend under a diagram says of a kind.
+  // `notation` is what the legend over a diagram says of a kind.
   element actor {
     notation 'Someone who uses it'
     style {
@@ -180,5 +180,14 @@ views {
     include * where kind is service and tag is not #legacy
     include api
     autoLayout TopBottom 160 24
+  }
+
+  view rows {
+    title 'Told which rows'
+    description 'rank: the people first and alone, the stores on one row, the partners last'
+    include *
+    rank source { sender, driver }
+    rank same { customers, parcels, events }
+    rank max { maps, post }
   }
 }

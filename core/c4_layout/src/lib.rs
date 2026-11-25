@@ -199,7 +199,7 @@ fn size(node: &ViewNode) -> Sized {
 /// What to draw besides the view itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
-    /// A legend under the diagram: a sample of each look whose kind has a
+    /// A legend over the diagram: a sample of each look whose kind has a
     /// `notation`, with what it says. None, if nothing shown has one.
     pub legend: bool,
 }
@@ -302,9 +302,20 @@ pub fn layout_with(view: &ComputedView, colors: &BTreeMap<String, String>, optio
     let (placed, lines_down) = if view.sequence {
         sequence::layout(&in_nodes, &in_edges)
     } else {
-        (graph::layout_spaced(&in_nodes, &in_edges, view.direction, view.rank_gap, view.node_gap), Vec::new())
+        let ranks: Vec<graph::InRank> = view
+            .ranks
+            .iter()
+            .map(|r| graph::InRank {
+                rank: r.rank,
+                nodes: r.nodes.iter().filter_map(|id| index.get(id.as_str()).copied()).collect(),
+            })
+            .collect();
+        (
+            graph::layout_spaced(&in_nodes, &in_edges, view.direction, view.rank_gap, view.node_gap, &ranks),
+            Vec::new(),
+        )
     };
-    let lifelines = view
+    let mut lifelines: Vec<Lifeline> = view
         .nodes
         .iter()
         .zip(&lines_down)
@@ -540,10 +551,34 @@ pub fn layout_with(view: &ComputedView, colors: &BTreeMap<String, String>, optio
     }
 
     let (mut width, mut height) = (placed.width.ceil(), placed.height.ceil());
-    let legend = if options.legend { legend(view, colors, width, height) } else { None };
+    let legend = if options.legend { legend(view, colors, width) } else { None };
     if let Some(legend) = &legend {
+        // The legend is first, over the drawing: everything drawn so far
+        // moves down to make room.
+        let down = legend.y + legend.height;
+        let label = |l: &mut Label| l.y = round(l.y + down);
+        let point = |p: &mut Point| p.y = round(p.y + down);
+        for node in &mut nodes {
+            node.y = round(node.y + down);
+            node.behind.iter_mut().for_each(point);
+            node.labels.iter_mut().for_each(label);
+            if let Some(icon) = &mut node.icon {
+                icon.y = round(icon.y + down);
+            }
+        }
+        for edge in &mut edges {
+            edge.path.iter_mut().for_each(point);
+            edge.labels.iter_mut().for_each(label);
+            for marker in &mut edge.markers {
+                marker.points.iter_mut().for_each(point);
+            }
+        }
+        for lifeline in &mut lifelines {
+            point(&mut lifeline.from);
+            point(&mut lifeline.to);
+        }
         width = width.max(legend.x + legend.width + LEGEND_MARGIN);
-        height = legend.y + legend.height + LEGEND_MARGIN;
+        height += down;
     }
     Diagram {
         id: view.id.clone(),
@@ -574,11 +609,13 @@ const LEGEND_TEXT_LINE: f64 = 16.5;
 /// Between one entry and the next, across and down.
 const ENTRY_GAP_X: f64 = 24.0;
 const ENTRY_GAP_Y: f64 = 12.0;
+/// The most entries in a row, however wide the drawing.
+const LEGEND_COLUMNS: usize = 5;
 
-/// The legend for a view, under a drawing of this size: one entry for each
+/// The legend for a view, over a drawing this wide: one entry for each
 /// different look that has a `notation`, boxes first, in the order they
-/// first appear. As many to a row as fit under the drawing.
-fn legend(view: &ComputedView, colors: &BTreeMap<String, String>, width: f64, height: f64) -> Option<Legend> {
+/// first appear. As wide as the drawing, in rows of about the same length.
+fn legend(view: &ComputedView, colors: &BTreeMap<String, String>, width: f64) -> Option<Legend> {
     enum Sample<'a> {
         Node(&'a ViewNode),
         Edge(&'a c4_model::ViewEdge),
@@ -620,10 +657,17 @@ fn legend(view: &ComputedView, colors: &BTreeMap<String, String>, width: f64, he
         .ceil();
     let cell_w = SAMPLE_W + SAMPLE_GAP + text_w;
     let room = width - 2.0 * LEGEND_MARGIN - 2.0 * LEGEND_PAD;
-    let columns = (((room + ENTRY_GAP_X) / (cell_w + ENTRY_GAP_X)).floor() as usize).clamp(1, entries.len());
-    let rows = entries.len().div_ceil(columns);
-    let (x, y) = (LEGEND_MARGIN, height);
-    let legend_w = 2.0 * LEGEND_PAD + columns as f64 * cell_w + (columns - 1) as f64 * ENTRY_GAP_X;
+    let fit = (((room + ENTRY_GAP_X) / (cell_w + ENTRY_GAP_X)).floor() as usize).clamp(1, entries.len());
+    // Rows of about the same length rather than a full one and a remainder,
+    // and never one long thin row.
+    let rows = entries.len().div_ceil(fit.min(LEGEND_COLUMNS));
+    let columns = entries.len().div_ceil(rows);
+    // The frame is as wide as the drawing over it, the columns spread
+    // evenly across it.
+    let inner = (columns as f64 * cell_w + (columns - 1) as f64 * ENTRY_GAP_X).max(room);
+    let pitch = (inner + ENTRY_GAP_X) / columns as f64;
+    let (x, y) = (LEGEND_MARGIN, LEGEND_MARGIN);
+    let legend_w = 2.0 * LEGEND_PAD + inner;
     let legend_h =
         LEGEND_PAD + LEGEND_TITLE + rows as f64 * SAMPLE_H + (rows - 1) as f64 * ENTRY_GAP_Y + LEGEND_PAD;
 
@@ -640,7 +684,7 @@ fn legend(view: &ComputedView, colors: &BTreeMap<String, String>, width: f64, he
     let mut labels = vec![label(x + LEGEND_PAD, y + LEGEND_PAD + 11.0, "Legend", GROUP_TITLE_SIZE, true)];
     let (mut nodes, mut edges) = (Vec::new(), Vec::new());
     for (i, ((sample, notation), lines)) in entries.iter().zip(&words).enumerate() {
-        let left = x + LEGEND_PAD + (i % columns) as f64 * (cell_w + ENTRY_GAP_X);
+        let left = x + LEGEND_PAD + (i % columns) as f64 * pitch;
         let top = y + LEGEND_PAD + LEGEND_TITLE + (i / columns) as f64 * (SAMPLE_H + ENTRY_GAP_Y);
         match sample {
             Sample::Node(node) => {
@@ -1231,12 +1275,21 @@ mod tests {
         let ws = load(&[Source { name: "t.c4".into(), text: NOTED.into() }]);
         assert_eq!(layout(&ws.model.compute_view("index").unwrap(), &ws.model.colors), with);
         let legend = with.legend.as_ref().unwrap();
-        // The drawing itself is where it was, the legend under it.
-        assert_eq!((&with.nodes, &with.edges), (&without.nodes, &without.edges));
-        assert_eq!(legend.y, without.height);
-        assert!(with.height > without.height && with.width >= without.width);
+        // The legend is first, the drawing itself as it was, under it.
+        assert_eq!(legend.y, LEGEND_MARGIN);
+        let down = legend.y + legend.height;
+        assert_eq!(with.height, without.height + down);
+        assert!(with.width >= without.width);
+        for (moved, was) in with.nodes.iter().zip(&without.nodes) {
+            assert_eq!((moved.x, moved.y), (was.x, was.y + down));
+            assert_eq!(moved.labels[0].y, was.labels[0].y + down);
+        }
+        for (moved, was) in with.edges.iter().zip(&without.edges) {
+            assert_eq!(moved.path[0], Point { x: was.path[0].x, y: was.path[0].y + down });
+            assert_eq!(moved.markers[0].points[0].y, was.markers[0].points[0].y + down);
+        }
         assert!(legend.x >= 0.0 && legend.x + legend.width <= with.width);
-        assert!(legend.y + legend.height <= with.height);
+        assert!(with.nodes.iter().all(|n| n.y >= down));
 
         // Two services look the same and say the same: one entry. `plain`
         // and `sync` say nothing: none.
@@ -1273,6 +1326,46 @@ mod tests {
         for (i, a) in places.iter().enumerate() {
             assert!(places[i + 1..].iter().all(|b| (a.0 - b.0).abs() > 50.0 || (a.1 - b.1).abs() > 20.0));
         }
+    }
+
+    #[test]
+    fn a_legend_is_as_wide_as_the_drawing_in_even_rows() {
+        // So many kinds, one box of each, side by side; how many are on
+        // each row of the legend.
+        let rows = |kinds: usize| -> (Diagram, Vec<usize>) {
+            let mut spec = String::new();
+            let mut model = String::new();
+            for k in 0..kinds {
+                spec += &format!("element k{k} {{ notation 'Kind {k}' }}\n");
+                model += &format!("e{k} = k{k}\n");
+            }
+            let source = format!(
+                "specification {{ {spec} }} model {{ {model} }} views {{ view index {{ include * }} }}"
+            );
+            let ws = load(&[Source { name: "t.c4".into(), text: source }]);
+            let view = ws.model.compute_view("index").unwrap();
+            let d = layout(&view, &ws.model.colors);
+            let legend = d.legend.clone().unwrap();
+            assert_eq!(legend.nodes.len(), kinds);
+            let mut tops: Vec<f64> = legend.nodes.iter().map(|n| n.y).collect();
+            tops.dedup();
+            let counts = tops.iter().map(|&y| legend.nodes.iter().filter(|n| n.y == y).count()).collect();
+            (d, counts)
+        };
+        // Nine would fit in one row under nine boxes: five and four.
+        let (d, counts) = rows(9);
+        assert_eq!(counts, [5, 4]);
+        let legend = d.legend.unwrap();
+        assert_eq!((legend.x, legend.x + legend.width), (LEGEND_MARGIN, d.width - LEGEND_MARGIN));
+        // The second row stands under the first, the columns evenly apart.
+        let xs: Vec<f64> = legend.nodes.iter().map(|n| n.x).collect();
+        assert_eq!(xs[5..], xs[..4]);
+        let apart = xs[1] - xs[0];
+        assert!(xs[..5].windows(2).all(|w| (w[1] - w[0] - apart).abs() < 0.02), "{xs:?}");
+        assert!(apart > SAMPLE_W + SAMPLE_GAP + ENTRY_GAP_X);
+        assert_eq!(rows(5).1, [5]);
+        assert_eq!(rows(6).1, [3, 3]);
+        assert_eq!(rows(11).1, [4, 4, 3]);
     }
 
     #[test]

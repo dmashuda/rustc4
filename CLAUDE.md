@@ -77,7 +77,7 @@ One Rust core, thin bindings, renderers that only draw.
   `Workspace::wanted` (`C4Ui::wanted`) lists those not given, for whoever
   reads files to read and give: the CLI and the macOS app do. The core
   never touches the file system.
-- **A legend is part of the `Diagram`** (`Diagram::legend`), under the
+- **A legend is part of the `Diagram`** (`Diagram::legend`), over the
   drawing and inside its width and height, whenever the view shows
   something whose kind has a `notation`, unless it is turned off
   (`c4_layout::Options`, `--no-legend`, the `legend` tap). Its samples are ordinary `Node`s
@@ -134,6 +134,11 @@ and sibling groups in one order everywhere, place x by iterating "move
 toward neighbours, then project onto the separation constraints" (`project`
 is a small VPSC), place y with room for group borders, route through the
 placeholders. Everything is computed top-to-bottom and turned at the end.
+
+A view's `rank` blocks come in as sets of boxes that rank as one box
+(`Graph::set`); the set held at the first row has every line turned to
+leave it, the one at the last to arrive. A line between two boxes of one
+set gets a single placeholder in the row below and goes round under them.
 
 Groups are not nodes: a group is a pair of border variables in the x
 constraints and a span of rows. A line to a group as a whole ends at an

@@ -130,6 +130,19 @@ pub enum Direction {
     RightLeft,
 }
 
+/// What a `rank` block asks of the boxes it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rank {
+    /// On one row.
+    Same,
+    /// On the first row, or the last.
+    Min,
+    Max,
+    /// The same, and nothing else on that row.
+    Source,
+    Sink,
+}
+
 #[derive(Debug)]
 pub struct ViewDef {
     pub id: Option<String>,
@@ -187,6 +200,11 @@ pub enum ViewRule {
         direction: Direction,
         rank_gap: Option<f64>,
         node_gap: Option<f64>,
+    },
+    /// `rank same { a, b }`: which row the boxes named are put in.
+    Rank {
+        rank: Rank,
+        targets: Vec<Ref>,
     },
     /// `global style name` / `global predicate name`: the rules a `global`
     /// block gave that name, here.
