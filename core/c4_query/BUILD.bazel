@@ -5,7 +5,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # language models over MCP; nothing here knows which.
 rust_library(
     name = "c4_query",
-    srcs = glob(["src/**/*.rs"]),
+    # tests/ holds each file's unit tests, compiled only into the test below.
+    srcs = glob(["src/**/*.rs", "tests/**/*.rs"]),
+    crate_root = "src/lib.rs",
     visibility = [
         "//bindings:__subpackages__",
         "//cli:__subpackages__",
