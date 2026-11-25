@@ -130,10 +130,14 @@ One Rust core, thin bindings, renderers that only draw.
 `core/c4_layout/src/graph.rs`, in the order it runs: break cycles, rank
 (longest path, then shorten), add a placeholder per row for each long line
 (one carries the label), order rows by barycenter keeping groups together
-and sibling groups in one order everywhere, place x by iterating "move
+and sibling groups in one order everywhere, then swap two neighbours of one
+group wherever that crosses fewer lines, place x by iterating "move
 toward neighbours, then project onto the separation constraints" (`project`
 is a small VPSC), place y with room for group borders, route through the
-placeholders. Everything is computed top-to-bottom and turned at the end.
+placeholders, then straighten: between the corners a line must keep (its
+ends, and beside its label) it leaves out every placeholder it can without
+coming near a box, a label or a group it is not in; its label moves with
+it when there is room clear of every other line. Everything is computed top-to-bottom and turned at the end.
 
 A view's `rank` blocks come in as sets of boxes that rank as one box
 (`Graph::set`); the set held at the first row has every line turned to

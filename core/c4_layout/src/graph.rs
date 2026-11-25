@@ -14,7 +14,8 @@
 //! 4. **Place.** Left-to-right positions are found by pulling everything
 //!    toward what it is connected to, subject to nothing overlapping and
 //!    nothing sitting inside a group it does not belong to.
-//! 5. **Route.** Each line runs through its placeholders.
+//! 5. **Route.** Each line runs through its placeholders, then as straight
+//!    as it can between its ends without coming near anything else.
 //!
 //! Everything is worked out as if lines ran top to bottom; other directions
 //! turn the result at the end.
@@ -36,6 +37,13 @@ const MARGIN: f64 = 24.0;
 const STUB: f64 = 14.0;
 /// A label sits this far to the side of its line.
 const LABEL_GAP: f64 = 7.0;
+/// How near a line may come to a box it has nothing to do with, and to a
+/// group it is not in, when it takes a straighter way than through its
+/// placeholders.
+const CLEAR_BOX: f64 = 10.0;
+const CLEAR_GROUP: f64 = 6.0;
+/// How far from a turn a straightened line starts to round it.
+const CORNER: f64 = 27.0;
 /// A line from a box to itself: how far its loop reaches out of the side.
 const LOOP: f64 = 26.0;
 
@@ -365,7 +373,47 @@ pub(crate) fn layout_spaced(
         });
     }
 
-    let mut routes: Vec<Option<Route>> = (0..edges.len()).map(|_| None).collect();
+    // What a line must stay clear of: (left, top, right, bottom), and the
+    // box, or after the boxes the group, it is.
+    let mut boxes: Vec<([f64; 4], usize)> = Vec::new();
+    for (i, n) in g.nodes.iter().enumerate() {
+        match n.kind {
+            Kind::Real => boxes.push((
+                [
+                    n.x - n.wl - CLEAR_BOX,
+                    n.y - n.h / 2.0 - CLEAR_BOX,
+                    n.x + n.wr + CLEAR_BOX,
+                    n.y + n.h / 2.0 + CLEAR_BOX,
+                ],
+                i,
+            )),
+            // The words of a line, beside it.
+            Kind::Label => boxes.push(([n.x + 2.0, n.y - n.h / 2.0, n.x + n.wr, n.y + n.h / 2.0], i)),
+            _ => {}
+        }
+    }
+    let groups: Vec<[f64; 4]> = g
+        .clusters
+        .iter()
+        .map(|c| [c.left - CLEAR_GROUP, c.top - CLEAR_GROUP, c.right + CLEAR_GROUP, c.bottom + CLEAR_GROUP])
+        .collect();
+
+    // First every line through its placeholders, then each in turn as
+    // straight as the others leave room for.
+    struct Draft {
+        input: usize,
+        a: usize,
+        b: usize,
+        flat: bool,
+        reversed: bool,
+        pts: Vec<(f64, f64)>,
+        /// The corners it keeps whatever else it may leave out.
+        kept: Vec<usize>,
+        /// The placeholder with its words, and that one's corners.
+        words: Option<(usize, Vec<usize>)>,
+        label: Option<Rect>,
+    }
+    let mut drafts: Vec<Draft> = Vec::new();
     for edge in &g.edges {
         let Some(input) = edge.input else { continue };
         let chain = &edge.chain;
@@ -387,8 +435,12 @@ pub(crate) fn layout_spaced(
         let start = port(a, chain[1], true);
         let end = port(b, chain[chain.len() - 2], flat);
         let mut pts = vec![start];
+        // The corners a line keeps whatever else it may leave out: its
+        // ends, straight out of a box and into one, and beside its words.
+        let mut kept = vec![0];
         if g.nodes[a].kind == Kind::Real {
             pts.push((start.0, start.1 + STUB));
+            kept.push(1);
             // A box shorter than its row: straight on to the row's edge
             // before turning, or the line would cut across its neighbours.
             let bottom = bands[g.nodes[a].rank as usize].1;
@@ -397,6 +449,8 @@ pub(crate) fn layout_spaced(
             }
         }
         let mut label = None;
+        // The placeholder with the line's words, and its corners.
+        let mut words: Option<(usize, Vec<usize>)> = None;
         for &m in &chain[1..chain.len() - 1] {
             let node = &g.nodes[m];
             let (top, bottom) = bands[node.rank as usize];
@@ -408,6 +462,8 @@ pub(crate) fn layout_spaced(
                 pts.push((node.x, node.y));
             }
             if node.kind == Kind::Label {
+                let from = if bottom - top > 0.5 && !flat { pts.len() - 2 } else { pts.len() - 1 };
+                words = Some((m, (from..pts.len()).collect()));
                 label = Some(turn_rect(
                     node.x + LABEL_GAP,
                     node.y - node.h / 2.0,
@@ -428,8 +484,82 @@ pub(crate) fn layout_spaced(
                 pts.push((end.0, top));
             }
             pts.push((end.0, end.1 - STUB));
+            kept.push(pts.len() - 1);
         }
         pts.push(end);
+        kept.push(pts.len() - 1);
+        drafts.push(Draft { input, a, b, flat, reversed: edge.reversed, pts, kept, words, label });
+    }
+
+    let mut routes: Vec<Option<Route>> = (0..edges.len()).map(|_| None).collect();
+    let mut lines: Vec<Vec<(f64, f64)>> = drafts.iter().map(|d| d.pts.clone()).collect();
+    for (at, draft) in drafts.into_iter().enumerate() {
+        let Draft { input, a, b, flat, reversed, mut pts, mut kept, words, mut label } = draft;
+        // Through its placeholders a line turns a little at every row.
+        // Between two corners it keeps it goes as straight as it can
+        // without coming near a box or its words, or into a group neither
+        // of its ends is in.
+        if !flat {
+            let (ca, cb) = (g.nodes[a].cluster, g.nodes[b].cluster);
+            let straighten = |boxes: &[([f64; 4], usize)], kept: &[usize], but: usize| {
+                let clear = |p: (f64, f64), q: (f64, f64)| {
+                    boxes.iter().all(|&(r, n)| n == a || n == b || n == but || !crosses(p, q, r))
+                        && (1..g.clusters.len())
+                            .all(|c| g.around(c, ca) || g.around(c, cb) || !crosses(p, q, groups[c]))
+                };
+                let mut straight = vec![pts[0]];
+                let mut i = 0;
+                while i + 1 < pts.len() {
+                    let limit = kept.iter().copied().find(|&k| k > i).unwrap_or(pts.len() - 1);
+                    let next = (i + 2..=limit).rev().find(|&j| clear(pts[i], pts[j])).unwrap_or(i + 1);
+                    straight.push(pts[next]);
+                    i = next;
+                }
+                straight
+            };
+            // Its words go with it, beside wherever it now passes their
+            // row, if there is room for them there, clear of every other
+            // line; if not, the line keeps to where its words are.
+            let mut moved = None;
+            if let Some((m, _)) = &words {
+                let node = &g.nodes[*m];
+                let free = straighten(&boxes, &kept, *m);
+                let (top, bottom) = (node.y - node.h / 2.0, node.y + node.h / 2.0);
+                let x = x_at(&free, top).max(x_at(&free, bottom));
+                let place = [x + 2.0, top, x + node.wr, bottom];
+                let over =
+                    |r: [f64; 4]| place[0] < r[2] && r[0] < place[2] && place[1] < r[3] && r[1] < place[3];
+                let within = |r: [f64; 4]| {
+                    place[0] >= r[0] && place[2] <= r[2] && place[1] >= r[1] && place[3] <= r[3]
+                };
+                let pad = [place[0] - 3.0, place[1] - 3.0, place[2] + 3.0, place[3] + 3.0];
+                let fits = boxes.iter().all(|&(r, n)| n == *m || !over(r))
+                    && g.clusters.iter().skip(1).all(|c| {
+                        !over([c.left - 4.0, c.top - 4.0, c.right + 4.0, c.bottom + 4.0])
+                            || within([c.left + 4.0, c.top + 4.0, c.right - 4.0, c.bottom - 4.0])
+                    })
+                    && lines.iter().enumerate().all(|(other, line)| {
+                        other == at || line.windows(2).all(|w| !crosses(w[0], w[1], pad))
+                    });
+                if fits {
+                    moved = Some((free, *m, place));
+                    label = Some(turn_rect(x + LABEL_GAP, top, x + node.wr - LABEL_GAP, bottom));
+                }
+            }
+            if let Some((free, m, place)) = moved {
+                pts = free;
+                if let Some(entry) = boxes.iter_mut().find(|(_, n)| *n == m) {
+                    entry.0 = place;
+                }
+            } else {
+                if let Some((_, corners)) = &words {
+                    kept.extend(corners);
+                    kept.sort_unstable();
+                }
+                pts = straighten(&boxes, &kept, usize::MAX);
+            }
+            pts = cornered(&pts);
+        }
         // A line to a group stops at the group's border.
         if g.nodes[a].kind != Kind::Real {
             clip_start(&mut pts, &g.cluster_rect(g.nodes[a].cluster));
@@ -439,7 +569,8 @@ pub(crate) fn layout_spaced(
             clip_start(&mut pts, &g.cluster_rect(g.nodes[b].cluster));
             pts.reverse();
         }
-        if edge.reversed {
+        lines[at] = pts.clone();
+        if reversed {
             pts.reverse();
         }
         pts.dedup_by(|p, q| (p.0 - q.0).abs() < 0.01 && (p.1 - q.1).abs() < 0.01);
@@ -514,6 +645,61 @@ pub(crate) fn layout_spaced(
         width: x1 - x0 + 2.0 * MARGIN,
         height: y1 - y0 + 2.0 * MARGIN,
     }
+}
+
+/// The same path with a corner more before and after each turn. The curve
+/// drawn through a path cuts its corners, the further the longer the
+/// straights either side: this keeps it within a third of `CORNER` of
+/// the path, which is nearer than a line is let come to a box.
+fn cornered(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(pts.len() * 3);
+    for pair in pts.windows(2) {
+        let (p, q) = (pair[0], pair[1]);
+        out.push(p);
+        let length = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();
+        if length > 2.0 * CORNER {
+            let t = CORNER / length;
+            out.push((p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t));
+            out.push((q.0 - (q.0 - p.0) * t, q.1 - (q.1 - p.1) * t));
+        }
+    }
+    out.extend(pts.last());
+    out
+}
+
+/// Where a path that only goes down is, across, when it is `y` down.
+fn x_at(pts: &[(f64, f64)], y: f64) -> f64 {
+    for pair in pts.windows(2) {
+        let (p, q) = (pair[0], pair[1]);
+        if y <= q.1 {
+            let t = if q.1 - p.1 > 1e-9 { ((y - p.1) / (q.1 - p.1)).clamp(0.0, 1.0) } else { 0.0 };
+            return p.0 + (q.0 - p.0) * t;
+        }
+    }
+    pts.last().map_or(0.0, |p| p.0)
+}
+
+/// Whether the straight line from `p` to `q` touches the rectangle
+/// (left, top, right, bottom).
+fn crosses(p: (f64, f64), q: (f64, f64), r: [f64; 4]) -> bool {
+    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    // For each side: how far along the line it is crossed, going in or out.
+    for (d, near, far) in [(dx, r[0] - p.0, r[2] - p.0), (dy, r[1] - p.1, r[3] - p.1)] {
+        if d.abs() < 1e-9 {
+            if near > 0.0 || far < 0.0 {
+                return false;
+            }
+        } else {
+            let (a, b) = (near / d, far / d);
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Cuts a path that starts inside `rect` back to where it last leaves it.
@@ -1082,6 +1268,46 @@ impl Graph {
         self.rekey(&pos);
         for r in 0..self.ranks.len() {
             self.ranks[r] = self.arrange(&self.ranks[r], &pos);
+        }
+        set_pos(&self.ranks, &mut pos);
+
+        // Then two neighbours in a row change places wherever their lines
+        // cross fewer times that way. Only two of one group: groups stay
+        // whole and in their order.
+        let mut ends: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for &(a, b) in &segments {
+            ends[a].push(b);
+            ends[b].push(a);
+        }
+        // How often lines from `u` cross lines from `v`, `u` being first.
+        let crossed = |pos: &[f64], u: usize, v: usize| -> usize {
+            let mut total = 0;
+            for &p in &ends[u] {
+                for &q in &ends[v] {
+                    if rank_of[p] == rank_of[q] && pos[p] > pos[q] {
+                        total += 1;
+                    }
+                }
+            }
+            total
+        };
+        for _ in 0..12 {
+            let mut changed = false;
+            for r in 0..self.ranks.len() {
+                for i in 0..self.ranks[r].len().saturating_sub(1) {
+                    let (u, v) = (self.ranks[r][i], self.ranks[r][i + 1]);
+                    if self.nodes[u].cluster == self.nodes[v].cluster
+                        && crossed(&pos, v, u) < crossed(&pos, u, v)
+                    {
+                        self.ranks[r].swap(i, i + 1);
+                        pos.swap(u, v);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
 
@@ -1711,6 +1937,71 @@ mod tests {
                 }
             }
             assert!(out.edges.iter().all(|e| e.points.len() >= 2));
+            // No line goes through a box it is not a line of, and no
+            // line's words lie over a box or over another line's.
+            let within = |r: &Rect| [r.x + 1.0, r.y + 1.0, r.x + r.w - 1.0, r.y + r.h - 1.0];
+            for (e, route) in out.edges.iter().enumerate() {
+                for other in (4..n.len()).filter(|&i| i != edges[e].source && i != edges[e].target) {
+                    for pair in route.points.windows(2) {
+                        assert!(!crosses(pair[0], pair[1], within(&n[other])), "line {e} through {other}");
+                    }
+                }
+                let Some(label) = &route.label else { continue };
+                assert!((4..n.len()).all(|i| !overlap(label, &n[i])), "words of {e} over a box");
+                for later in &out.edges[e + 1..] {
+                    assert!(later.label.is_none_or(|l| !overlap(label, &l)), "words of {e} over words");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn a_long_line_is_straight_where_nothing_is_in_its_way() {
+        // Down a chain of four, and from the first straight to the last,
+        // past the two between.
+        let edges = [line(0, 1), line(1, 2), line(2, 3), line(0, 3)];
+        let out = layout(&boxes(4), &edges, Direction::TopBottom);
+        let n = &out.nodes;
+        let pts = &out.edges[3].points;
+        let (first, last) = (pts[0], pts[pts.len() - 1]);
+        assert_eq!((first.1, last.1), (n[0].y + n[0].h, n[3].y));
+        // Not through the boxes it passes, nor nearer them than it may be.
+        for passed in [&n[1], &n[2]] {
+            let near = [
+                passed.x - CLEAR_BOX + 1.0,
+                passed.y - CLEAR_BOX + 1.0,
+                passed.x + passed.w + CLEAR_BOX - 1.0,
+                passed.y + passed.h + CLEAR_BOX - 1.0,
+            ];
+            assert!(pts.windows(2).all(|w| !crosses(w[0], w[1], near)), "{pts:?}");
+        }
+        // And little longer than the straight line between its ends.
+        let length: f64 =
+            pts.windows(2).map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt()).sum();
+        let direct = ((last.0 - first.0).powi(2) + (last.1 - first.1).powi(2)).sqrt();
+        assert!(length < direct * 1.08, "{length} for {direct}: {pts:?}");
+        // It turns only to leave one box and to arrive at the other: no
+        // corner between is a turn back the other way.
+        let turns = pts
+            .windows(3)
+            .filter(|w| {
+                let cross = (w[1].0 - w[0].0) * (w[2].1 - w[1].1) - (w[1].1 - w[0].1) * (w[2].0 - w[1].0);
+                cross.abs() > 1e-6
+            })
+            .count();
+        assert!(turns <= 4, "{turns} turns: {pts:?}");
+    }
+
+    #[test]
+    fn crossing_a_rectangle_and_rounding_a_corner() {
+        let r = [10.0, 10.0, 20.0, 20.0];
+        assert!(crosses((0.0, 0.0), (30.0, 30.0), r));
+        assert!(crosses((15.0, 0.0), (15.0, 12.0), r));
+        assert!(!crosses((0.0, 0.0), (9.0, 30.0), r));
+        assert!(!crosses((0.0, 25.0), (30.0, 25.0), r));
+        assert!(!crosses((0.0, 0.0), (5.0, 5.0), r));
+        // A long straight gets a corner near each end; a short one is left.
+        let path = cornered(&[(0.0, 0.0), (0.0, 100.0), (30.0, 100.0)]);
+        assert_eq!(path, [(0.0, 0.0), (0.0, CORNER), (0.0, 100.0 - CORNER), (0.0, 100.0), (30.0, 100.0)]);
     }
 }
