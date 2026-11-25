@@ -68,11 +68,18 @@ is what a directory means, and what more than one defines is reported.)
 
 To have `rustc4` as a command, take it from a
 [release](https://github.com/dmashuda/rustc4/releases) (Linux x86_64 and
-aarch64, macOS arm64) and put it on your `PATH`:
+aarch64, macOS arm64, Windows x86_64) and put it on your `PATH`:
 
 ```bash
 tar -xzf rustc4-v0.1.0-linux-x86_64.tar.gz
 cp rustc4-v0.1.0-linux-x86_64/rustc4 ~/.local/bin/
+```
+
+On Windows it is a `.zip` holding `rustc4.exe`, which needs nothing
+installed beside it:
+
+```powershell
+Expand-Archive rustc4-v0.1.0-windows-x86_64.zip
 ```
 
 Each archive carries a signed attestation of where it was built. To check
@@ -88,6 +95,12 @@ Or build it:
 ```bash
 bazel build --config=release //cli
 cp bazel-bin/cli/cli ~/.local/bin/rustc4
+```
+
+The Windows one is built from Linux or macOS, not on Windows:
+
+```bash
+bazel build --config=release --platforms=//bazel:windows_x86_64 //cli   # bazel-bin/cli/cli.exe
 ```
 
 That one binary has the web viewer inside it: `rustc4 build` needs nothing

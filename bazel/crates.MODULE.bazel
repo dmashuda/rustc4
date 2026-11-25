@@ -17,6 +17,11 @@ CRATE_TRIPLES = [
     "wasm32-unknown-unknown",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
+    # Windows is built as x86_64-pc-windows-gnullvm (//bazel:windows_x86_64),
+    # which rules_rust has no platform for: Bazel's constraints do not tell
+    # one Windows ABI from another. This is the triple whose platform says
+    # "Windows on x86_64", and that is all the crates here ask about.
+    "x86_64-pc-windows-msvc",
 ]
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")

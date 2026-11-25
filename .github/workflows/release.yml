@@ -85,6 +85,15 @@ jobs:
             runner: macos-latest
             bazelisk: bazelisk-darwin-arm64
             bazelisk_sha256: 555d2ff912ccd336d0060bdb5251ef2f62629c6f8fbadb59005a45d5625793ec
+          # Windows is built on Linux: everything on the way to the binary
+          # (the viewer's wasm and JavaScript among it) is made by Linux
+          # tools, and only the last compile and link are for Windows. It
+          # cannot be run here, so the `windows` job below does that.
+          - target: windows-x86_64
+            runner: ubuntu-latest
+            bazelisk: bazelisk-linux-amd64
+            bazelisk_sha256: a248ae2b2b62b5baebb748f6fba7203bff1a27e5d01b55399a8406744cb539e8
+            platform: //bazel:windows_x86_64
     runs-on: ${{ matrix.runner }}
     # Nothing is cached between releases, so each builds the toolchain
     # (on Linux: glibc, libc++, compiler-rt and libunwind) from source.
@@ -114,10 +123,13 @@ jobs:
           bazel --version
 
       - name: Build the CLI
-        run: bazel build --config=release //cli
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: bazel build --config=release ${PLATFORM:+--platforms="$PLATFORM"} //cli
 
       # The binary that is about to be published, not another build of it.
       - name: It runs
+        if: ${{ !matrix.platform }}
         run: |
           bazel-bin/cli/cli --help
           bazel-bin/cli/cli check examples/shop.c4
@@ -129,21 +141,64 @@ jobs:
         run: |
           name="rustc4-$VERSION-$TARGET"
           mkdir -p "dist/$name"
-          cp bazel-bin/cli/cli "dist/$name/rustc4"
           cp LICENSE README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          case "$TARGET" in
+            windows-*)
+              cp bazel-bin/cli/cli.exe "dist/$name/rustc4.exe"
+              (cd dist && zip -qr "$name.zip" "$name")
+              ;;
+            *)
+              cp bazel-bin/cli/cli "dist/$name/rustc4"
+              tar -C dist -czf "dist/$name.tar.gz" "$name"
+              ;;
+          esac
           rm -r "dist/$name"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rustc4-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
           retention-days: 7
 
+  # The Windows archive, as a user gets it: unpacked and run on Windows.
+  # Nothing is built here.
+  windows:
+    name: run windows-x86_64
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rustc4-windows-x86_64
+          path: dist
+
+      - name: It runs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path (Get-Item dist/rustc4-*.zip) -DestinationPath unpacked
+          $rustc4 = (Get-Item unpacked/rustc4-*/rustc4.exe).FullName
+          & $rustc4 --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $rustc4 check examples/shop.c4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $rustc4 export png examples/shop.c4 -o out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $rustc4 build examples\delivery -o site
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem out, site
+
   publish:
     name: attest and publish
-    needs: [check, build]
+    needs: [check, build, windows]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     # Only this job can sign or publish, and it runs none of the
@@ -163,7 +218,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum rustc4-*.tar.gz > SHA256SUMS
+          sha256sum rustc4-*.tar.gz rustc4-*.zip > SHA256SUMS
           cat SHA256SUMS
 
       # Signed build provenance for each archive: which repository, which
@@ -171,7 +226,9 @@ jobs:
       #   gh attestation verify rustc4-<version>-<target>.tar.gz --repo <owner>/rustc4
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/rustc4-*.tar.gz
+          subject-path: |
+            dist/rustc4-*.tar.gz
+            dist/rustc4-*.zip
 
       - name: Publish the release
         env:
