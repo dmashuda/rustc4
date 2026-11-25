@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
 use c4_model::{Severity, Source, Workspace};
@@ -21,7 +22,8 @@ Usage:
                                                 Write each view to a file
   rustc4 build  <path>... [-o <dir>]            Write a static site: the viewer,
                                                 the model, and every view as SVG
-  rustc4 serve  <path>... [--port <n>]          Show the model in a browser, and
+  rustc4 serve  <path>... [--port <n>] [--host <address>]
+                                                Show the model in a browser, and
                                                 again whenever a file changes
   rustc4 bundle <path>... -o <file.json>        Gather a model into one file
   rustc4 query  <path>... -- <question>         Ask about a model (see below)
@@ -46,6 +48,9 @@ Options:
   --background <color>  Paint behind the diagram, e.g. '#ffffff' (default: transparent)
   --scale <n>           PNG pixels per diagram pixel (default: 2)
   --port <n>            Where serve listens (default: 8080; 0 for any free port)
+  --host <address>      Who serve listens to (default: 127.0.0.1, this machine
+                        only, or what RUSTC4_HOST says; 0.0.0.0 for everyone
+                        who can reach it, as inside a container)
   --no-legend           Leave out the legend: over each diagram, what its
                         shapes and lines mean, for those whose kind has a
                         'notation' in the specification
@@ -70,9 +75,23 @@ struct Options {
     scale: f32,
     legend: bool,
     port: u16,
+    host: IpAddr,
+}
+
+/// The address `serve` listens on, as `--host` or RUSTC4_HOST gives it.
+fn host(text: &str) -> Result<IpAddr, String> {
+    text.parse()
+        .map_err(|_| format!("'{text}' is not an address to listen on: use one like 127.0.0.1 or 0.0.0.0"))
 }
 
 fn options(args: &[String]) -> Result<Options, String> {
+    // This machine only, unless told otherwise: the model is not everyone's
+    // to read. A container is told by its image, where nothing outside it
+    // could reach a server that listened only inside.
+    let listen = match std::env::var("RUSTC4_HOST") {
+        Ok(text) if !text.is_empty() => host(&text).map_err(|e| format!("RUSTC4_HOST: {e}"))?,
+        _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    };
     let mut o = Options {
         paths: Vec::new(),
         out: PathBuf::from("."),
@@ -81,6 +100,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         scale: 2.0,
         legend: true,
         port: 8080,
+        host: listen,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -105,6 +125,7 @@ fn options(args: &[String]) -> Result<Options, String> {
                 o.port =
                     text.parse().map_err(|_| format!("'{text}' is not a port: use a number up to 65535"))?;
             }
+            "--host" => o.host = host(&value("--host")?)?,
             flag if flag.starts_with('-') => return Err(format!("unknown option '{flag}'")),
             path => o.paths.push(PathBuf::from(path)),
         }
@@ -309,7 +330,7 @@ fn run_inner(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Resul
         }
         "serve" => {
             let o = options(&args[1..])?;
-            serve::Server::bind(o.paths, o.port, o.legend)?.run(out, err)
+            serve::Server::bind(o.paths, o.host, o.port, o.legend)?.run(out, err)
         }
         "bundle" => {
             let o = options(&args[1..])?;

@@ -7,7 +7,7 @@
 //! response closes it, and the files are watched by looking at them.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
@@ -86,13 +86,13 @@ pub struct Server {
 }
 
 impl Server {
-    /// Reads the model and takes the port (0: any free one). Fails in words
-    /// if there is nothing to serve or nowhere to serve it.
-    pub fn bind(paths: Vec<PathBuf>, port: u16, legend: bool) -> Result<Server, String> {
+    /// Reads the model and takes the port (0: any free one) at the address
+    /// to listen on. Fails in words if there is nothing to serve or nowhere
+    /// to serve it.
+    pub fn bind(paths: Vec<PathBuf>, host: IpAddr, port: u16, legend: bool) -> Result<Server, String> {
         let sources = read_sources(&paths)?;
         let bundle = site::bundle(&sources)?;
-        // This machine only: the model is not everyone's to read.
-        let listener = TcpListener::bind(("127.0.0.1", port))
+        let listener = TcpListener::bind((host, port))
             .map_err(|e| format!("port {port}: {e} (choose another with --port)"))?;
         let live = Live { version: 0, sources, bundle };
         Ok(Server {
