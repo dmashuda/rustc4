@@ -55,6 +55,7 @@ bazel run //cli -- views examples/shop.c4  # list its views
 bazel run //cli -- export svg examples/shop.c4 -o out      # every view as an image
 bazel run //cli -- export png examples/shop.c4 -o out --view shop --scale 2
 bazel run //cli -- build examples/shop.c4 -o dist  # a static site: viewer + model + SVGs
+bazel run //cli -- serve examples/shop.c4  # the same site on http://127.0.0.1:8080, following the file
 bazel run //cli -- --help
 bazel test //...
 ```
@@ -106,6 +107,11 @@ bazel build --config=release --platforms=//bazel:windows_x86_64 //cli   # bazel-
 That one binary has the web viewer inside it: `rustc4 build` needs nothing
 else to write a site, and any file server can host the result. The examples
 below are written with it.
+
+`rustc4 serve <path>...` is that site without writing it: the viewer on
+`http://127.0.0.1:8080` (`--port` for another), showing the files as they
+are. Save one from whatever editor you use and the page redraws, on the view
+it was on; the terminal says what is wrong with what was saved.
 
 A diagram has a legend over it: a sample of each shape and line whose
 kind has a `notation` in the specification
@@ -292,7 +298,7 @@ Markdown in a description is shown as it is written.
   sans-serif found).
 - **Flows**: behaviour tests written once in Rust and run through every
   renderer.
-- `rustc4 serve` with live reload, and a language server.
+- A language server.
 
 ## Contributing
 

@@ -14,6 +14,7 @@ bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
     --output_groups=clippy_checks //core/... //bindings/... //cli/...
 bazel run //apps/web:serve             # the playground on :8080
 bazel run //apps/macos:rustc4          # the macOS app
+bazel run //cli -- serve examples/shop.c4   # a model on :8080, redrawn on save
 bazel run //cli -- export png examples -o /tmp/out --background '#fff'
 ```
 
@@ -124,6 +125,10 @@ One Rust core, thin bindings, renderers that only draw.
 - The CLI embeds `//apps/web:viewer` (`cli/BUILD.bazel`); `rustc4 build`
   writes it beside `model.json`. The viewer decides between showing a
   published model and being the playground by whether `model.json` is there.
+- `rustc4 serve` (`cli/src/serve.rs`) is that site from memory, std only:
+  it looks at the files four times a second, and `model.json` comes with an
+  `x-rustc4-changes` header naming an event stream; the viewer listens there
+  and, on an event, fetches the model again and calls `setSources`.
 
 ## Layout, in brief
 

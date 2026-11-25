@@ -20,6 +20,11 @@ struct SourceJson {
     text: String,
 }
 
+fn parse(sources: &str) -> Vec<Source> {
+    let sources: Vec<SourceJson> = serde_json::from_str(sources).unwrap_or_default();
+    sources.into_iter().map(|s| Source { name: s.name, text: s.text }).collect()
+}
+
 fn json<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("the screen is plain data")
 }
@@ -33,9 +38,7 @@ impl C4Ui {
     /// the screen says there is nothing to draw.
     #[wasm_bindgen(constructor)]
     pub fn new(sources: &str, editable: bool) -> C4Ui {
-        let sources: Vec<SourceJson> = serde_json::from_str(sources).unwrap_or_default();
-        let sources = sources.into_iter().map(|s| Source { name: s.name, text: s.text }).collect();
-        C4Ui { inner: c4_ui::C4Ui::new(sources, editable) }
+        C4Ui { inner: c4_ui::C4Ui::new(parse(sources), editable) }
     }
 
     /// What to draw around the diagram: a `Screen`, as JSON.
@@ -52,6 +55,14 @@ impl C4Ui {
     #[wasm_bindgen(js_name = setSource)]
     pub fn set_source(&mut self, file: usize, text: &str) -> String {
         json(&self.inner.set_source(file, text))
+    }
+
+    /// Other sources altogether, as the constructor takes them: the files
+    /// changed where they are kept. What was showing stays if it still
+    /// exists; returns the screen.
+    #[wasm_bindgen(js_name = setSources)]
+    pub fn set_sources(&mut self, sources: &str, editable: bool) -> String {
+        json(&self.inner.set_sources(parse(sources), editable))
     }
 
     /// The sources as they stand, as the constructor takes them: for the
