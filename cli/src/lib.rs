@@ -42,7 +42,7 @@ Options:
   --view <id>           Only this view (may be repeated)
   --background <color>  Paint behind the diagram, e.g. '#ffffff' (default: transparent)
   --scale <n>           PNG pixels per diagram pixel (default: 2)
-  --no-legend           Leave out the legend: under each diagram, what its
+  --no-legend           Leave out the legend: over each diagram, what its
                         shapes and lines mean, for those whose kind has a
                         'notation' in the specification
 ";
