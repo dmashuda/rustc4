@@ -77,7 +77,7 @@ One Rust core, thin bindings, renderers that only draw.
   `Workspace::wanted` (`C4Ui::wanted`) lists those not given, for whoever
   reads files to read and give: the CLI and the macOS app do. The core
   never touches the file system.
-- **A legend is part of the `Diagram`** (`Diagram::legend`), under the
+- **A legend is part of the `Diagram`** (`Diagram::legend`), over the
   drawing and inside its width and height, whenever the view shows
   something whose kind has a `notation`, unless it is turned off
   (`c4_layout::Options`, `--no-legend`, the `legend` tap). Its samples are ordinary `Node`s

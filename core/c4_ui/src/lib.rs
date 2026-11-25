@@ -18,7 +18,7 @@
 //! | `edge.<source>-><target>#<step>` | selects a step of a dynamic view |
 //! | `canvas` | selects nothing |
 //! | `back` | returns to the view before this one |
-//! | `legend` | takes the legend under the diagram away, or brings it back |
+//! | `legend` | takes the legend over the diagram away, or brings it back |
 //! | `details.close` | closes the panel |
 //! | `file.<n>` | shows that source file in the editor |
 //! | `file.add` | adds an empty source file and shows it |

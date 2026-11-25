@@ -157,7 +157,7 @@ pub struct Lifeline {
 
 /// What the looks in the diagram mean: a sample of each, with the words
 /// its kind's `notation` gives it. Inside the diagram's own width and
-/// height, below everything else.
+/// height, above everything else.
 ///
 /// Draw the frame's outline (no fill), then the samples exactly as any
 /// node or edge is drawn, then the text. A sample is not something to tap,

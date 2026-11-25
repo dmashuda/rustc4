@@ -107,7 +107,7 @@ That one binary has the web viewer inside it: `rustc4 build` needs nothing
 else to write a site, and any file server can host the result. The examples
 below are written with it.
 
-A diagram has a legend under it: a sample of each shape and line whose
+A diagram has a legend over it: a sample of each shape and line whose
 kind has a `notation` in the specification
 (`element service { notation 'A service we run' }`), with what it says. A
 view showing nothing with a notation has none. `--no-legend` leaves it out
