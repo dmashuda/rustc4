@@ -110,6 +110,11 @@ One Rust core, thin bindings, renderers that only draw.
 - **Errors never stop the drawing.** The parser recovers at the next line,
   the model leaves out what it could not resolve, and whatever is left is
   drawn. Every diagnostic has a file, line and column and says what to do.
+- **Tests are not written in `src/`.** The unit tests of `src/<file>.rs`
+  are `tests/<file>.rs` in the same crate, which the source file names at
+  its end (`#[cfg(test)] #[path = "../tests/<file>.rs"] mod tests;`), so
+  they still see what is private. Something only tests need goes in the
+  test file too.
 - A new field on `Screen` or `Diagram` touches: the Rust struct, the remote
   declaration in `bindings/uniffi/src/lib.rs` (the compiler catches a
   mismatch), the type in `apps/web/src/main.ts`, and for `Diagram` both

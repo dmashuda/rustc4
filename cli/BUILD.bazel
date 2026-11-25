@@ -21,7 +21,9 @@ genrule(
 
 rust_library(
     name = "cli_lib",
-    srcs = glob(["src/**/*.rs"], exclude = ["src/main.rs"]),
+    # tests/ holds each file's unit tests, compiled only into cli_test.
+    srcs = glob(["src/**/*.rs", "tests/**/*.rs"], exclude = ["src/main.rs"]),
+    crate_root = "src/lib.rs",
     compile_data = [":viewer_files"],
     crate_name = "rustc4_cli",
     # include_bytes! wants a path it can open from the source file's own

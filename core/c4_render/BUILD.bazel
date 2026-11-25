@@ -3,7 +3,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # A Diagram as SVG text: what the web app shows and what the CLI exports.
 rust_library(
     name = "c4_render",
-    srcs = glob(["src/**/*.rs"]),
+    # tests/ holds each file's unit tests, compiled only into the test below.
+    srcs = glob(["src/**/*.rs", "tests/**/*.rs"]),
+    crate_root = "src/lib.rs",
     visibility = [
         "//bindings:__subpackages__",
         "//cli:__subpackages__",
