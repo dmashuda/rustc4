@@ -106,9 +106,10 @@ public final class C4Model {
         // names they would have; finding and reading them is done here.
         named = []
         for name in ui.wanted() {
-            guard let url = Self.locate(name, in: roots), let text = try? String(contentsOf: url, encoding: .utf8)
+            guard let url = Self.locate(name, in: roots), let data = try? Data(contentsOf: url),
+                let source = sourceFromBytes(name: name, bytes: data)
             else { continue }
-            sources.append(Source(name: name, text: text))
+            sources.append(source)
             named.append(url)
         }
         if !named.isEmpty { screen = ui.setSources(sources: sources, editable: false) }

@@ -72,9 +72,11 @@ One Rust core, thin bindings, renderers that only draw.
   Lifelines are in the `Diagram`, drawn behind everything, and are not
   tapped or faded.
 - **An icon is a URL in the `Diagram`**, with the rectangle to draw it
-  in: `https:` for a renderer to fetch, or `data:` holding an SVG file the
-  source named. Such a file is one more `Source` (named `.svg`, not read
-  as a model), as is the text of a `descriptionFile` (`.md`, `.txt`);
+  in: `https:` for a renderer to fetch, or `data:` holding an image file
+  the source named. Such a file is one more `Source` (named `.svg`, or
+  `.png` / `.jpg` / `.gif` / `.webp` with its bytes in base64, which
+  `Source::from_bytes` does; not read as a model), as is the text of a
+  `descriptionFile` (`.md`, `.txt`);
   `Workspace::wanted` (`C4Ui::wanted`) lists those not given, for whoever
   reads files to read and give: the CLI and the macOS app do. The core
   never touches the file system.

@@ -26,6 +26,13 @@ pub struct Source {
     pub text: String,
 }
 
+/// A file that was read, as the source to give: its text, or an image's
+/// bytes as the model takes them. `None` for text that is not UTF-8.
+#[uniffi::export]
+pub fn source_from_bytes(name: String, bytes: Vec<u8>) -> Option<Source> {
+    Source::from_bytes(name, &bytes)
+}
+
 // ---------------------------------------------------------------- diagram --
 
 #[uniffi::remote(Record)]

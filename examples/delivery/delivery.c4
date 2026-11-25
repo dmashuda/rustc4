@@ -120,6 +120,8 @@ model {
   maps = partner 'Map provider' 'Roads and traffic'
   post = partner 'National post' 'Takes what we cannot reach' {
     #legacy
+    // An image that is not an SVG.
+    icon ./icons/post.png
   }
 
   sender -> web 'books with'

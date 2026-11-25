@@ -176,9 +176,7 @@ pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>, String> {
     // The images the sources name for icons, beside them. One that is not
     // there is left for the model to report, where it is asked for.
     for name in c4_model::load(&sources).wanted {
-        if let Ok(text) = std::fs::read_to_string(&name) {
-            sources.push(Source { name, text });
-        }
+        sources.extend(std::fs::read(&name).ok().and_then(|bytes| Source::from_bytes(name, &bytes)));
     }
     Ok(sources)
 }
@@ -375,6 +373,30 @@ mod tests {
     fn a_source_is_named_with_slashes_on_every_platform() {
         assert_eq!(slashed("examples\\delivery\\delivery.c4", '\\'), "examples/delivery/delivery.c4");
         assert_eq!(slashed("examples/a\\b.c4", '/'), "examples/a\\b.c4");
+    }
+
+    /// An icon's file is found beside the model whether it is text or not,
+    /// and goes into a bundle with it.
+    #[test]
+    fn an_icon_is_read_from_a_file_that_is_text_or_not() {
+        let dir = scratch("icons");
+        let model = "specification { element box }
+model { b = box { icon ./logo.png }; c = box { icon ./logo.svg } }";
+        std::fs::write(dir.join("m.c4"), model).unwrap();
+        std::fs::write(dir.join("logo.png"), [0x89, b'P', b'N', b'G']).unwrap();
+        std::fs::write(dir.join("logo.svg"), "<svg/>").unwrap();
+        let sources = read_sources(std::slice::from_ref(&dir)).unwrap();
+        let ws = c4_model::load(&sources);
+        assert!(ws.diagnostics.is_empty() && ws.wanted.is_empty(), "{:?}", ws.diagnostics);
+        let icon = |name: &str| ws.model.element(name).unwrap().style.icon.clone().unwrap();
+        assert_eq!(icon("b"), "data:image/png;base64,iVBORw==");
+        assert_eq!(icon("c"), "data:image/svg+xml;base64,PHN2Zy8+");
+
+        let again = site::unbundle(&site::bundle(&sources).unwrap()).unwrap();
+        let mut names: Vec<_> = again.iter().map(|s| s.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["logo.png", "logo.svg", "m.c4"]);
+        assert!(c4_model::load(&again).diagnostics.is_empty());
     }
 
     /// A fresh directory under the test's own temporary one.
