@@ -302,7 +302,18 @@ pub fn layout_with(view: &ComputedView, colors: &BTreeMap<String, String>, optio
     let (placed, lines_down) = if view.sequence {
         sequence::layout(&in_nodes, &in_edges)
     } else {
-        (graph::layout_spaced(&in_nodes, &in_edges, view.direction, view.rank_gap, view.node_gap), Vec::new())
+        let ranks: Vec<graph::InRank> = view
+            .ranks
+            .iter()
+            .map(|r| graph::InRank {
+                rank: r.rank,
+                nodes: r.nodes.iter().filter_map(|id| index.get(id.as_str()).copied()).collect(),
+            })
+            .collect();
+        (
+            graph::layout_spaced(&in_nodes, &in_edges, view.direction, view.rank_gap, view.node_gap, &ranks),
+            Vec::new(),
+        )
     };
     let lifelines = view
         .nodes

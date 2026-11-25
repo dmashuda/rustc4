@@ -802,14 +802,33 @@ impl Parser {
             }
             // `rank same { a, b }`: which row things are put in.
             "rank" => {
-                self.errors.push(ParseError {
-                    span,
-                    message: "'rank' is not supported yet; the layout chooses the rows.".into(),
-                });
-                if matches!(self.peek(), Tok::Ident(_)) {
-                    self.next();
+                let at = self.span();
+                let rank = if *self.peek() == Tok::LBrace {
+                    Rank::Same
+                } else {
+                    let how = self.ident("'same', 'min', 'max', 'source' or 'sink'")?;
+                    match how.as_str() {
+                        "same" => Rank::Same,
+                        "min" => Rank::Min,
+                        "max" => Rank::Max,
+                        "source" => Rank::Source,
+                        "sink" => Rank::Sink,
+                        _ => {
+                            return self.fail(
+                                at,
+                                format!("Unknown rank '{how}': use same, min, max, source or sink."),
+                            );
+                        }
+                    }
+                };
+                self.expect(Tok::LBrace)?;
+                let mut targets = Vec::new();
+                while *self.peek() != Tok::RBrace {
+                    targets.push(self.reference()?);
+                    self.eat(&Tok::Comma);
                 }
-                self.skip_block()?;
+                self.next();
+                view.rules.push(ViewRule::Rank { rank, targets });
             }
             "routing" => {
                 let at = self.span();

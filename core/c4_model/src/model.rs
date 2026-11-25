@@ -1514,6 +1514,11 @@ impl Builder<'_> {
                 self.element_style(style, &mut scratch);
             }
             ViewRule::AutoLayout { .. } => {}
+            ViewRule::Rank { targets, .. } => {
+                for target in targets {
+                    self.find(target, scope);
+                }
+            }
             ViewRule::Global { name, style, span } => {
                 if !self.model.globals.contains_key(&(*style, name.clone())) {
                     let what = if *style { "style" } else { "predicate group" };

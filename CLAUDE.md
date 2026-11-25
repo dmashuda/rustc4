@@ -135,6 +135,11 @@ toward neighbours, then project onto the separation constraints" (`project`
 is a small VPSC), place y with room for group borders, route through the
 placeholders. Everything is computed top-to-bottom and turned at the end.
 
+A view's `rank` blocks come in as sets of boxes that rank as one box
+(`Graph::set`); the set held at the first row has every line turned to
+leave it, the one at the last to arrive. A line between two boxes of one
+set gets a single placeholder in the row below and goes round under them.
+
 Groups are not nodes: a group is a pair of border variables in the x
 constraints and a span of rows. A line to a group as a whole ends at an
 invisible anchor inside it and is clipped at the border.

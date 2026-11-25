@@ -19,7 +19,7 @@
 //! Everything is worked out as if lines ran top to bottom; other directions
 //! turn the result at the end.
 
-use c4_model::Direction;
+use c4_model::{Direction, Rank};
 
 /// Gap between two boxes in a row, and between a box and a line passing it.
 const NODE_SEP: f64 = 46.0;
@@ -54,6 +54,13 @@ pub(crate) struct InEdge {
     /// Zero for no label.
     pub label_w: f64,
     pub label_h: f64,
+}
+
+/// `rank same { a, b }`: what the view asks of the rows.
+pub(crate) struct InRank {
+    pub rank: Rank,
+    /// Input nodes; a group among them is left where it is.
+    pub nodes: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -153,11 +160,18 @@ struct Graph {
     /// Between two rows of boxes, and between two boxes in a row.
     rank_sep: f64,
     node_sep: f64,
+    /// For each node, the one it shares a row with because a `rank` says
+    /// so: all of a set name the same node. Itself, for most.
+    set: Vec<usize>,
+    /// The set a `rank` puts on the first row, and the one on the last;
+    /// `true` when nothing else may be on that row.
+    first: Option<(usize, bool)>,
+    last: Option<(usize, bool)>,
 }
 
 #[cfg(test)]
 pub(crate) fn layout(nodes: &[InNode], edges: &[InEdge], direction: Direction) -> Output {
-    layout_spaced(nodes, edges, direction, None, None)
+    layout_spaced(nodes, edges, direction, None, None, &[])
 }
 
 /// `rank_gap` and `node_gap`: how far apart rows are, and the boxes in a
@@ -168,6 +182,7 @@ pub(crate) fn layout_spaced(
     direction: Direction,
     rank_gap: Option<f64>,
     node_gap: Option<f64>,
+    ranks: &[InRank],
 ) -> Output {
     let horizontal = matches!(direction, Direction::LeftRight | Direction::RightLeft);
     if nodes.is_empty() {
@@ -201,6 +216,9 @@ pub(crate) fn layout_spaced(
         ranks: Vec::new(),
         rank_sep: rank_gap.unwrap_or(RANK_SEP),
         node_sep: node_gap.unwrap_or(NODE_SEP),
+        set: Vec::new(),
+        first: None,
+        last: None,
     };
     // For each input node: its cluster (a group) or its node (a box).
     let mut cluster_of = vec![usize::MAX; nodes.len()];
@@ -285,8 +303,36 @@ pub(crate) fn layout_spaced(
         });
     }
 
+    // What `rank` says: the boxes of one block rank as one. Blocks that
+    // share a box are one block; every `min` and `source` is one block, on
+    // the first row, and every `max` and `sink` one on the last.
+    g.set = (0..g.nodes.len()).collect();
+    for rule in ranks {
+        let mut members = rule.nodes.iter().map(|&i| node_of[i]).filter(|&n| n != usize::MAX);
+        let Some(one) = members.next() else { continue };
+        for other in members {
+            g.join(one, other);
+        }
+        let alone = matches!(rule.rank, Rank::Source | Rank::Sink);
+        let end = match rule.rank {
+            Rank::Same => continue,
+            Rank::Min | Rank::Source => &mut g.first,
+            Rank::Max | Rank::Sink => &mut g.last,
+        };
+        let (before, was_alone) = end.unwrap_or((one, false));
+        *end = Some((one, alone || was_alone));
+        g.join(one, before);
+    }
+    for v in 0..g.set.len() {
+        g.set[v] = g.find(v);
+    }
+    g.first = g.first.map(|(v, alone)| (g.set[v], alone));
+    // One block cannot be on both the first row and the last.
+    g.last = g.last.map(|(v, alone)| (g.set[v], alone)).filter(|&(v, _)| Some(v) != g.first.map(|f| f.0));
+
     g.break_cycles();
     g.rank();
+    g.across(edges, horizontal);
     g.spans();
     g.fill_in(edges, horizontal);
     g.order();
@@ -324,6 +370,9 @@ pub(crate) fn layout_spaced(
         let Some(input) = edge.input else { continue };
         let chain = &edge.chain;
         let (a, b) = (chain[0], chain[chain.len() - 1]);
+        // Between two boxes of one row: out of the bottom of one, round
+        // under, and into the bottom of the other.
+        let flat = g.set[a] == g.set[b];
         let port = |n: usize, other: usize, below: bool| -> (f64, f64) {
             let node = &g.nodes[n];
             if node.kind != Kind::Real {
@@ -336,7 +385,7 @@ pub(crate) fn layout_spaced(
             (node.x + shift, if below { node.y + node.h / 2.0 } else { node.y - node.h / 2.0 })
         };
         let start = port(a, chain[1], true);
-        let end = port(b, chain[chain.len() - 2], false);
+        let end = port(b, chain[chain.len() - 2], flat);
         let mut pts = vec![start];
         if g.nodes[a].kind == Kind::Real {
             pts.push((start.0, start.1 + STUB));
@@ -351,7 +400,7 @@ pub(crate) fn layout_spaced(
         for &m in &chain[1..chain.len() - 1] {
             let node = &g.nodes[m];
             let (top, bottom) = bands[node.rank as usize];
-            if bottom - top > 0.5 {
+            if bottom - top > 0.5 && !flat {
                 // Straight down through a row that has boxes in it.
                 pts.push((node.x, top));
                 pts.push((node.x, bottom));
@@ -367,7 +416,13 @@ pub(crate) fn layout_spaced(
                 ));
             }
         }
-        if g.nodes[b].kind == Kind::Real {
+        if flat {
+            let bottom = bands[g.nodes[b].rank as usize].1;
+            if bottom > end.1 + STUB + 1.0 {
+                pts.push((end.0, bottom));
+            }
+            pts.push((end.0, end.1 + STUB));
+        } else if g.nodes[b].kind == Kind::Real {
             let top = bands[g.nodes[b].rank as usize].0;
             if top < end.1 - STUB - 1.0 {
                 pts.push((end.0, top));
@@ -494,6 +549,29 @@ impl Graph {
         self.nodes.len() - 1
     }
 
+    /// The node that stands for `v`'s set.
+    fn find(&self, mut v: usize) -> usize {
+        while self.set[v] != v {
+            v = self.set[v];
+        }
+        v
+    }
+
+    /// Makes one set of `a`'s and `b`'s.
+    fn join(&mut self, a: usize, b: usize) {
+        let (a, b) = (self.find(a), self.find(b));
+        self.set[a.max(b)] = a.min(b);
+    }
+
+    /// Each step of a line, as (the node in the upper row, the one below).
+    fn hops(&self, edge: &Edge) -> Vec<(usize, usize)> {
+        let chain = &edge.chain;
+        if chain.len() == 3 && self.set[chain[0]] == self.set[chain[2]] {
+            return vec![(chain[0], chain[1]), (chain[2], chain[1])];
+        }
+        chain.windows(2).map(|pair| (pair[0], pair[1])).collect()
+    }
+
     /// Whether cluster `a` is `b` or around it.
     fn around(&self, a: usize, mut b: usize) -> bool {
         loop {
@@ -538,54 +616,99 @@ impl Graph {
     // ----------------------------------------------------------- 1. rank --
 
     /// Turns around every line that closes a loop, found depth first.
+    /// Boxes a `rank` puts on one row count as one box here.
     fn break_cycles(&mut self) {
         let n = self.nodes.len();
-        let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (i, e) in self.edges.iter().enumerate() {
-            out[e.from].push(i);
-        }
-        // 0 unseen, 1 on the path being walked, 2 done.
-        let mut state = vec![0u8; n];
-        let mut flip = Vec::new();
-        for root in 0..n {
-            if state[root] != 0 {
-                continue;
+        // Nothing comes before the first row, or after the last.
+        let (first, last) = (self.first.map(|f| f.0), self.last.map(|l| l.0));
+        for e in 0..self.edges.len() {
+            let (from, to) = (self.set[self.edges[e].from], self.set[self.edges[e].to]);
+            if from != to && self.edges[e].input.is_some() && (Some(to) == first || Some(from) == last) {
+                self.turn(e);
             }
-            let mut stack = vec![(root, 0usize)];
-            state[root] = 1;
-            while let Some(&mut (v, ref mut next)) = stack.last_mut() {
-                if *next < out[v].len() {
-                    let e = out[v][*next];
-                    *next += 1;
-                    let w = self.edges[e].to;
-                    match state[w] {
-                        0 => {
-                            state[w] = 1;
-                            stack.push((w, 0));
-                        }
-                        1 => flip.push(e),
-                        _ => {}
-                    }
-                } else {
-                    state[v] = 2;
-                    stack.pop();
+        }
+        // Each pass ends early only by turning a line that had not been
+        // turned in it; the bound is for safety.
+        for _ in 0..=self.edges.len() {
+            let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (i, e) in self.edges.iter().enumerate() {
+                if self.set[e.from] != self.set[e.to] {
+                    out[self.set[e.from]].push(i);
                 }
             }
+            // 0 unseen, 1 on the path being walked, 2 done.
+            let mut state = vec![0u8; n];
+            let mut flip = Vec::new();
+            let mut again = false;
+            'walk: for root in 0..n {
+                if state[root] != 0 || self.set[root] != root {
+                    continue;
+                }
+                // (node, its next line out, the line that led here)
+                let mut stack = vec![(root, 0usize, usize::MAX)];
+                state[root] = 1;
+                while let Some(&mut (v, ref mut next, _)) = stack.last_mut() {
+                    if *next < out[v].len() {
+                        let e = out[v][*next];
+                        *next += 1;
+                        let w = self.set[self.edges[e].to];
+                        match state[w] {
+                            0 => {
+                                state[w] = 1;
+                                stack.push((w, 0, e));
+                            }
+                            1 if self.edges[e].input.is_some() => flip.push(e),
+                            1 => {
+                                // What holds an anchor over its group is
+                                // not a line to turn: turn the last real
+                                // one on the way round, and look again.
+                                let start = stack.iter().position(|s| s.0 == w).unwrap_or(0);
+                                let real = stack[start + 1..]
+                                    .iter()
+                                    .rev()
+                                    .map(|s| s.2)
+                                    .find(|&l| self.edges[l].input.is_some() && !flip.contains(&l));
+                                flip.push(real.unwrap_or(e));
+                                again = real.is_some();
+                                if again {
+                                    break 'walk;
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        state[v] = 2;
+                        stack.pop();
+                    }
+                }
+            }
+            for e in flip {
+                self.turn(e);
+            }
+            if !again {
+                break;
+            }
         }
-        for e in flip {
-            let edge = &mut self.edges[e];
-            std::mem::swap(&mut edge.from, &mut edge.to);
-            edge.reversed = true;
-        }
+    }
+
+    fn turn(&mut self, e: usize) {
+        let edge = &mut self.edges[e];
+        std::mem::swap(&mut edge.from, &mut edge.to);
+        edge.reversed = !edge.reversed;
     }
 
     fn rank(&mut self) {
         let n = self.nodes.len();
+        // A set of boxes on one row is ranked as the node that stands for
+        // it; a line between two of them says nothing about rows.
+        let set = self.set.clone();
         let mut ins: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut outs: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (i, e) in self.edges.iter().enumerate() {
-            outs[e.from].push(i);
-            ins[e.to].push(i);
+            if set[e.from] != set[e.to] {
+                outs[set[e.from]].push(i);
+                ins[set[e.to]].push(i);
+            }
         }
         // Longest path from the top: every box as high as its lines allow.
         let mut waiting: Vec<usize> = ins.iter().map(|v| v.len()).collect();
@@ -597,29 +720,38 @@ impl Graph {
             at += 1;
             for &e in &outs[v] {
                 let edge = &self.edges[e];
-                rank[edge.to] = rank[edge.to].max(rank[v] + edge.minlen);
-                waiting[edge.to] -= 1;
-                if waiting[edge.to] == 0 {
-                    ready.push(edge.to);
+                let to = set[edge.to];
+                rank[to] = rank[to].max(rank[v] + edge.minlen);
+                waiting[to] -= 1;
+                if waiting[to] == 0 {
+                    ready.push(to);
                 }
             }
         }
+        let (first, last) = (self.first.map(|f| f.0), self.last.map(|l| l.0));
+        if let Some(last) = last {
+            rank[last] = (0..n).filter(|&v| set[v] == v).map(|v| rank[v]).max().unwrap_or(0);
+        }
         // Then shorten: a box with more lines going down than coming in is
         // moved down to meet them, and the other way round. Each move makes
-        // the lines shorter in total, so this ends.
+        // the lines shorter in total, so this ends. What a `rank` holds at
+        // the first or last row stays there.
         for _ in 0..100 {
             let mut changed = false;
             for v in 0..n {
+                if set[v] != v || Some(v) == first || Some(v) == last {
+                    continue;
+                }
                 let (mut lo, mut hi) = (i32::MIN, i32::MAX);
                 let (mut w_in, mut w_out) = (0.0, 0.0);
                 for &e in &ins[v] {
                     let edge = &self.edges[e];
-                    lo = lo.max(rank[edge.from] + edge.minlen);
+                    lo = lo.max(rank[set[edge.from]] + edge.minlen);
                     w_in += edge.weight;
                 }
                 for &e in &outs[v] {
                     let edge = &self.edges[e];
-                    hi = hi.min(rank[edge.to] - edge.minlen);
+                    hi = hi.min(rank[set[edge.to]] - edge.minlen);
                     w_out += edge.weight;
                 }
                 let target = match self.nodes[v].kind {
@@ -643,9 +775,51 @@ impl Graph {
                 break;
             }
         }
-        let first = rank.iter().copied().min().unwrap_or(0);
+        // `source` and `sink`: a row of their own, a whole step (a row of
+        // boxes and the row of labels before it) away from the rest.
+        let shared = |rank: &[i32], v: usize| {
+            (0..n).any(|u| self.nodes[u].kind == Kind::Real && set[u] != v && rank[set[u]] == rank[v])
+        };
+        if let Some((v, true)) = self.first
+            && shared(&rank, v)
+            && ins[v].iter().all(|&e| rank[set[self.edges[e].from]] + self.edges[e].minlen <= rank[v] - 2)
+        {
+            rank[v] -= 2;
+        }
+        if let Some((v, true)) = self.last
+            && shared(&rank, v)
+            && outs[v].iter().all(|&e| rank[set[self.edges[e].to]] - self.edges[e].minlen >= rank[v] + 2)
+        {
+            rank[v] += 2;
+        }
+        let top = (0..n).map(|v| rank[set[v]]).min().unwrap_or(0);
         for (v, node) in self.nodes.iter_mut().enumerate() {
-            node.rank = rank[v] - first;
+            node.rank = rank[set[v]] - top;
+        }
+    }
+
+    /// A line between two boxes of one row goes round under them: it gets
+    /// its one placeholder, in the row below, before groups learn their rows.
+    fn across(&mut self, inputs: &[InEdge], horizontal: bool) {
+        for e in 0..self.edges.len() {
+            let (from, to) = (self.edges[e].from, self.edges[e].to);
+            let Some(input) = self.edges[e].input else { continue };
+            if self.set[from] != self.set[to] {
+                continue;
+            }
+            let (label_w, label_h) = match (inputs[input].label_w, inputs[input].label_h) {
+                (w, h) if horizontal => (h, w),
+                (w, h) => (w, h),
+            };
+            let cluster = self.common(self.nodes[from].cluster, self.nodes[to].cluster);
+            let node = if label_w > 0.0 && label_h > 0.0 {
+                self.add(Kind::Label, cluster, LABEL_GAP, label_w + 2.0 * LABEL_GAP, label_h)
+            } else {
+                self.add(Kind::Dummy, cluster, 0.0, 0.0, 0.0)
+            };
+            self.nodes[node].rank = self.nodes[from].rank + 1;
+            self.set.push(node);
+            self.edges[e].chain = vec![from, node, to];
         }
     }
 
@@ -679,6 +853,9 @@ impl Graph {
     fn fill_in(&mut self, inputs: &[InEdge], horizontal: bool) {
         for e in 0..self.edges.len() {
             let Some(input) = self.edges[e].input else { continue };
+            if !self.edges[e].chain.is_empty() {
+                continue;
+            }
             let (from, to) = (self.edges[e].from, self.edges[e].to);
             let (r_from, r_to) = (self.nodes[from].rank, self.nodes[to].rank);
             let (label_w, label_h) = match (inputs[input].label_w, inputs[input].label_h) {
@@ -705,6 +882,7 @@ impl Graph {
                     self.add(Kind::Dummy, cluster, 0.0, 0.0, 0.0)
                 };
                 self.nodes[node].rank = rank;
+                self.set.push(node);
                 chain.push(node);
             }
             chain.push(to);
@@ -731,6 +909,7 @@ impl Graph {
                 if !present[c][rank as usize] {
                     let node = self.add(Kind::Spine, c, 0.0, 0.0, 0.0);
                     self.nodes[node].rank = rank;
+                    self.set.push(node);
                     let mut up = c;
                     while up != ROOT {
                         present[up][rank as usize] = true;
@@ -818,10 +997,10 @@ impl Graph {
         let mut segments: Vec<(usize, usize)> = Vec::new();
         for edge in &self.edges {
             if edge.input.is_some() {
-                for pair in edge.chain.windows(2) {
-                    down[pair[0]].push(pair[1]);
-                    up[pair[1]].push(pair[0]);
-                    segments.push((pair[0], pair[1]));
+                for (a, b) in self.hops(edge) {
+                    down[a].push(b);
+                    up[b].push(a);
+                    segments.push((a, b));
                 }
             } else if self.nodes[edge.to].rank - self.nodes[edge.from].rank == 1 {
                 down[edge.from].push(edge.to);
@@ -1154,8 +1333,8 @@ impl Graph {
         let mut gap = vec![rank_sep / 2.0; rows];
         for edge in &self.edges {
             if edge.input.is_some() {
-                for pair in edge.chain.windows(2) {
-                    let (a, b) = (&self.nodes[pair[0]], &self.nodes[pair[1]]);
+                for (a, b) in self.hops(edge) {
+                    let (a, b) = (&self.nodes[a], &self.nodes[b]);
                     let sideways = (a.x - b.x).abs() * 0.8;
                     let r = a.rank as usize;
                     gap[r] = gap[r].max((sideways * 0.3).min(rank_sep * 1.5));
@@ -1308,6 +1487,97 @@ mod tests {
 
         let out = layout(&boxes(3), &edges, Direction::BottomTop);
         assert!(out.nodes[0].y > out.nodes[1].y + out.nodes[1].h);
+    }
+
+    fn ranked(nodes: &[InNode], edges: &[InEdge], rank: Rank, named: &[usize]) -> Output {
+        let ranks = [InRank { rank, nodes: named.to_vec() }];
+        layout_spaced(nodes, edges, Direction::TopBottom, None, None, &ranks)
+    }
+
+    #[test]
+    fn rank_same_puts_boxes_on_one_row() {
+        // A chain, with its ends asked onto one row: the line that would
+        // have put the last below is the one that goes back up.
+        let edges = [line(0, 1), line(1, 2)];
+        let out = ranked(&boxes(3), &edges, Rank::Same, &[0, 2]);
+        let n = &out.nodes;
+        assert_eq!(n[0].y, n[2].y);
+        assert!(n[1].y > n[0].y + n[0].h && !overlap(&n[0], &n[2]), "{n:?}");
+        let pts = &out.edges[1].points;
+        assert!(pts[0].1 > pts[pts.len() - 1].1, "{pts:?}");
+    }
+
+    #[test]
+    fn a_line_along_a_row_goes_round_under_it() {
+        let mut edges = [line(0, 1)];
+        edges[0].label_w = 40.0;
+        edges[0].label_h = 14.0;
+        let out = ranked(&boxes(2), &edges, Rank::Same, &[0, 1]);
+        let n = &out.nodes;
+        assert_eq!(n[0].y, n[1].y);
+        assert!(!overlap(&n[0], &n[1]));
+        // Out of the bottom of one and into the bottom of the other.
+        let pts = &out.edges[0].points;
+        let bottom = n[0].y + n[0].h;
+        assert_eq!((pts[0].1, pts[pts.len() - 1].1), (bottom, bottom));
+        assert!(n[0].x <= pts[0].0 && pts[0].0 <= n[0].x + n[0].w);
+        assert!(n[1].x <= pts[pts.len() - 1].0 && pts[pts.len() - 1].0 <= n[1].x + n[1].w);
+        assert!(pts.iter().all(|p| p.1 >= bottom));
+        let label = out.edges[0].label.expect("its words have a place");
+        assert!(label.y >= bottom && label.y + label.h <= out.height);
+    }
+
+    #[test]
+    fn rank_min_and_max_are_the_first_row_and_the_last() {
+        // 0 -> 1 -> 2, and 3 on its own.
+        let edges = [line(0, 1), line(1, 2)];
+        let out = ranked(&boxes(4), &edges, Rank::Min, &[2]);
+        let n = &out.nodes;
+        assert!(n[2].y < n[1].y && n[2].y <= n[0].y && n[2].y == n[3].y, "{n:?}");
+        // Its line still ends at it.
+        let pts = &out.edges[1].points;
+        assert_eq!(pts[pts.len() - 1].1, n[2].y + n[2].h);
+
+        let out = ranked(&boxes(4), &edges, Rank::Max, &[0, 3]);
+        let n = &out.nodes;
+        assert!(n[0].y == n[3].y && n[0].y > n[1].y && n[0].y >= n[2].y, "{n:?}");
+    }
+
+    #[test]
+    fn rank_source_and_sink_have_their_row_to_themselves() {
+        let edges = [line(0, 1), line(1, 2)];
+        let out = ranked(&boxes(4), &edges, Rank::Source, &[3]);
+        let n = &out.nodes;
+        assert!((0..3).all(|i| n[3].y + n[3].h < n[i].y), "{n:?}");
+        let out = ranked(&boxes(4), &edges, Rank::Sink, &[3]);
+        let n = &out.nodes;
+        assert!((0..3).all(|i| n[3].y > n[i].y + n[i].h), "{n:?}");
+    }
+
+    #[test]
+    fn rank_keeps_groups_whole_and_ignores_what_it_cannot_use() {
+        // A box beside the groups and one two rows down, asked onto one
+        // row; the group and the repeat among the names count for nothing.
+        let mut nodes = grouped();
+        let count = nodes.len();
+        nodes.extend(boxes(2));
+        let members: Vec<usize> = (0..count).filter(|&i| !nodes[i].group).collect();
+        let edges = [line(members[0], count), line(count, count + 1)];
+        let out = ranked(&nodes, &edges, Rank::Same, &[members[0], count + 1, 1, 1]);
+        let n = &out.nodes;
+        assert_eq!(n[members[0]].y, n[count + 1].y);
+        for (i, node) in nodes.iter().enumerate() {
+            if let Some(parent) = node.parent {
+                assert!(inside(&n[i], &n[parent]), "{i} in {parent}: {n:?}");
+            }
+        }
+        // A rank naming only a group, or nothing, changes nothing.
+        let plain = layout(&nodes, &edges, Direction::TopBottom);
+        let group = (0..count).find(|&i| nodes[i].group).unwrap();
+        for named in [vec![group], vec![]] {
+            let out = ranked(&nodes, &edges, Rank::Same, &named);
+            assert_eq!(out.nodes, plain.nodes);
+        }
     }
 
     #[test]

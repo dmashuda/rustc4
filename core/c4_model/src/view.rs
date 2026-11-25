@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{Condition, Direction, ElementExpr, Predicate, RelExpr, StyleProps, ViewRule, Whose};
+use crate::ast::{Condition, Direction, ElementExpr, Predicate, Rank, RelExpr, StyleProps, ViewRule, Whose};
 use crate::model::{
     Arrow, ElementStyle, IconPosition, Line, Model, Relation, RelationStyle, Shape, Size, View,
 };
@@ -77,6 +77,8 @@ pub struct ComputedView {
     /// `autoLayout TopBottom 120 110`.
     pub rank_gap: Option<f64>,
     pub node_gap: Option<f64>,
+    /// What the view's `rank` blocks ask, in the order written.
+    pub ranks: Vec<ViewRank>,
     /// A dynamic view: its lines are steps, in the order they happen.
     pub dynamic: bool,
     /// To be drawn as a sequence rather than a diagram.
@@ -84,6 +86,14 @@ pub struct ComputedView {
     /// Parents before their children.
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
+}
+
+/// `rank same { a, b }`, with the names resolved to nodes of the view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewRank {
+    pub rank: Rank,
+    /// The ids of the nodes it names that the view shows, each once.
+    pub nodes: Vec<String>,
 }
 
 /// One relationship rule from an `exclude`, with its elements resolved.
@@ -189,7 +199,7 @@ impl Model {
                 ViewRule::AutoLayout { direction: d, rank_gap: r, node_gap: n } => {
                     (direction, rank_gap, node_gap) = (*d, *r, *n);
                 }
-                ViewRule::Style { .. } | ViewRule::Global { .. } => {}
+                ViewRule::Style { .. } | ViewRule::Global { .. } | ViewRule::Rank { .. } => {}
             }
         }
 
@@ -408,6 +418,23 @@ impl Model {
             }
         }
 
+        // What `rank` names, as far as it is still in the view.
+        let mut ranks: Vec<ViewRank> = Vec::new();
+        for rule in &rules {
+            let ViewRule::Rank { rank, targets } = rule else { continue };
+            let mut named: Vec<String> = Vec::new();
+            for target in targets {
+                let Some(i) = c.find(target).filter(|&i| c.visible[i]) else { continue };
+                let id = &self.elements[i].fqn;
+                if !named.contains(id) {
+                    named.push(id.clone());
+                }
+            }
+            if !named.is_empty() {
+                ranks.push(ViewRank { rank: *rank, nodes: named });
+            }
+        }
+
         Some(ComputedView {
             id: view.id.clone(),
             title: view.title.clone(),
@@ -415,6 +442,7 @@ impl Model {
             direction,
             rank_gap,
             node_gap,
+            ranks,
             dynamic: view.dynamic,
             sequence: view.dynamic && view.sequence,
             nodes,
@@ -718,7 +746,7 @@ impl Computing<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Arrow, Direction, IconPosition, Severity, Size, Source, load};
+    use crate::{Arrow, Direction, IconPosition, Rank, Severity, Size, Source, load};
 
     const SHOP: &str = "
         specification {
@@ -1092,6 +1120,45 @@ views {
     }
 
     #[test]
+    fn rank_names_what_the_view_shows() {
+        let ws = load(&[Source {
+            name: "m.c4".into(),
+            text: "specification { element box }
+model {
+  a = box { inner = box }
+  b = box
+  c = box
+}
+views {
+  view v {
+    include *
+    rank { a, b, a, nowhere }
+    rank sink { c, a.inner }
+    rank source { a.inner }
+    rank sideways { a }
+  }
+  view w extends v { exclude b }
+}"
+            .into(),
+        }]);
+        let messages: Vec<_> = ws.diagnostics.iter().map(|d| format!("{}:{}", d.line, d.message)).collect();
+        assert_eq!(messages.len(), 2, "{messages:#?}");
+        assert!(messages[0].starts_with("10:") && messages[0].contains("nowhere"), "{messages:#?}");
+        assert_eq!(messages[1], "13:Unknown rank 'sideways': use same, min, max, source or sink.");
+        // Named twice counts once; what is not in the view is not named;
+        // a block left with nothing is not there.
+        let ranks = |id: &str| -> Vec<(Rank, Vec<String>)> {
+            let view = ws.model.compute_view(id).unwrap();
+            view.ranks.iter().map(|r| (r.rank, r.nodes.clone())).collect()
+        };
+        assert_eq!(
+            ranks("v"),
+            [(Rank::Same, vec!["a".to_string(), "b".to_string()]), (Rank::Sink, vec!["c".to_string()])]
+        );
+        assert_eq!(ranks("w"), [(Rank::Same, vec!["a".to_string()]), (Rank::Sink, vec!["c".to_string()])]);
+    }
+
+    #[test]
     fn sizes_stacks_and_spacing_reach_the_view() {
         let ws = load(&[Source {
             name: "m.c4".into(),
@@ -1432,7 +1499,6 @@ views {
                 "17:A link on a view is not supported yet; it is not shown anywhere.",
                 "18:'order' is not supported yet; views are listed in the order they are written.",
                 "19:'ortho' routing is not supported yet; lines are drawn as curves.",
-                "20:'rank' is not supported yet; the layout chooses the rows.",
                 "21:'group' is not supported yet; what it includes is shown without a frame around it.",
                 "22:'navigateTo' on a relationship is not supported yet; it goes nowhere.",
                 "25:'metadata' on a step is not supported yet; it is ignored.",
