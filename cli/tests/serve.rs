@@ -1,5 +1,8 @@
 use super::*;
 use std::io::Read;
+use std::net::Ipv4Addr;
+
+const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 /// The whole answer to a GET, headers and all.
 fn get(addr: SocketAddr, path: &str) -> String {
@@ -20,7 +23,7 @@ fn serves_the_site_and_follows_the_files() {
         )
     };
     std::fs::write(&file, model("Before")).unwrap();
-    let server = Server::bind(vec![dir.clone()], 0, true).unwrap();
+    let server = Server::bind(vec![dir.clone()], LOCAL, 0, true).unwrap();
     let addr = server.addr().unwrap();
     std::thread::spawn(move || server.run(&mut std::io::sink(), &mut std::io::sink()));
 
@@ -62,8 +65,21 @@ fn serves_the_site_and_follows_the_files() {
 fn says_when_the_port_is_taken() {
     let dir = crate::tests::scratch("serve-port");
     std::fs::write(dir.join("m.c4"), "model {}").unwrap();
-    let first = Server::bind(vec![dir.clone()], 0, true).unwrap();
+    let first = Server::bind(vec![dir.clone()], LOCAL, 0, true).unwrap();
     let port = first.addr().unwrap().port();
-    let message = Server::bind(vec![dir], port, true).err().unwrap();
+    let message = Server::bind(vec![dir], LOCAL, port, true).err().unwrap();
     assert!(message.starts_with(&format!("port {port}: ")) && message.ends_with("--port)"), "{message}");
+}
+
+/// Listening to everyone, as in a container, is still reached from here.
+#[test]
+fn listens_where_it_is_told() {
+    let dir = crate::tests::scratch("serve-host");
+    std::fs::write(dir.join("m.c4"), "model {}").unwrap();
+    let server = Server::bind(vec![dir], IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0, true).unwrap();
+    let addr = server.addr().unwrap();
+    assert!(addr.ip().is_unspecified());
+    std::thread::spawn(move || server.run(&mut std::io::sink(), &mut std::io::sink()));
+    let page = get(SocketAddr::new(LOCAL, addr.port()), "/");
+    assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "{page}");
 }

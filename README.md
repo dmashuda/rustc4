@@ -63,6 +63,28 @@ the commit it says:
 gh attestation verify rustc4-v0.3.0-linux-x86_64.tar.gz --repo dmashuda/rustc4
 ```
 
+### Or in a container
+
+Each release is also an image, for Linux x86_64 and aarch64, holding the
+command and a font for it to draw PNGs with, and nothing else: no shell.
+The command is the entry point, and `/work` is where it starts, so mount
+the model there:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/dmashuda/rustc4 check .
+docker run --rm -v "$PWD:/work" --user "$(id -u):$(id -g)" ghcr.io/dmashuda/rustc4 export png . -o out
+docker run --rm -v "$PWD:/work" -p 8080:8080 ghcr.io/dmashuda/rustc4 serve .
+docker run --rm -i -v "$PWD:/work" ghcr.io/dmashuda/rustc4 mcp .
+```
+
+`--user` makes what is written yours rather than root's. `latest` is the
+newest release; a version (`ghcr.io/dmashuda/rustc4:v0.3.0`) stays what it
+is. The image is attested as the archives are:
+
+```bash
+gh attestation verify oci://ghcr.io/dmashuda/rustc4:v0.3.0 --repo dmashuda/rustc4
+```
+
 ### Or building it
 
 Everything is built by Bazel. Install
@@ -111,7 +133,8 @@ else to write a site, and any file server can host the result.
 
 `rustc4 serve <path>...` is that site without writing it: the viewer on
 `http://127.0.0.1:8080` (`--port` for another), showing the files as they
-are. Save one from whatever editor you use and the page redraws, on the view
+are. It answers this machine only; `--host 0.0.0.0` (or `RUSTC4_HOST`, which
+the image sets) lets in whoever can reach the port. Save one from whatever editor you use and the page redraws, on the view
 it was on; the terminal says what is wrong with what was saved.
 
 A diagram has a legend over it: a sample of each shape and line whose

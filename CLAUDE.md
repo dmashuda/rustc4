@@ -139,7 +139,12 @@ One Rust core, thin bindings, renderers that only draw.
 - `rustc4 serve` (`cli/src/serve.rs`) is that site from memory, std only:
   it looks at the files four times a second, and `model.json` comes with an
   `x-rustc4-changes` header naming an event stream; the viewer listens there
-  and, on an event, fetches the model again and calls `setSources`.
+  and, on an event, fetches the model again and calls `setSources`. It
+  listens on 127.0.0.1 unless `--host` or `RUSTC4_HOST` says otherwise.
+- The release's image (`tools/docker/Dockerfile`) compiles nothing: it is
+  the released Linux binary and a font for PNGs on a base with only glibc.
+  It sets `RUSTC4_HOST=0.0.0.0`. Something new the binary needs at run time
+  (a library, a file) has to be put there too.
 
 ## Layout, in brief
 

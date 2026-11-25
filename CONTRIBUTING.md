@@ -137,7 +137,18 @@ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 `.github/workflows/release.yml` checks the tag is on `main`, builds the
-CLI for each platform, attests the archives and publishes them. A tag with
-a suffix (`v0.2.0-rc.1`) is published as a pre-release. Run from the
-Actions tab instead, it builds the same archives and publishes nothing,
-which is the way to try a change to it.
+CLI for each platform, attests the archives and publishes them. The two
+Linux builds also become an image (`tools/docker/Dockerfile`: the binary
+and a font on a base with glibc and no shell), tried on each architecture
+and pushed to `ghcr.io/dmashuda/rustc4` under the version and `latest`. A
+tag with a suffix (`v0.2.0-rc.1`) is published as a pre-release, and leaves
+`latest` alone. Run from the Actions tab instead, it builds the same
+archives and images and publishes nothing, which is the way to try a change
+to it.
+
+To build the image by hand, unpack the Linux archives of a release as
+`linux-amd64/rustc4` and `linux-arm64/rustc4` in one directory, and
+
+```bash
+docker build -f tools/docker/Dockerfile -t rustc4 <that directory>
+```

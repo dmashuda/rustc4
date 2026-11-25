@@ -205,3 +205,13 @@ fn bundles_and_answers_questions() {
     );
     assert!(rustc4(&["query", "examples/shop.c4"]).2.contains("put the question after '--'"));
 }
+
+#[test]
+fn serve_wants_an_address_to_listen_on() {
+    assert_eq!(
+        rustc4(&["serve", "examples/shop.c4", "--host", "everyone"]).2,
+        "rustc4: 'everyone' is not an address to listen on: use one like 127.0.0.1 or 0.0.0.0\n"
+    );
+    assert_eq!(host("0.0.0.0"), Ok(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+    assert!(host("::").is_ok_and(|a| a.is_unspecified()));
+}
