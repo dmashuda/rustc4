@@ -13,7 +13,7 @@ bazel run @rules_rust//tools/rustfmt   # format Rust
 bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
     --output_groups=clippy_checks //core/... //bindings/... //cli/...
 bazel run //apps/web:serve             # the playground on :8080
-bazel run //apps/macos:rustc4          # the macOS app
+bazel run //apps/macos:rustc4 -- examples/shop.c4   # the macOS app, following that file
 bazel run //cli -- serve examples/shop.c4   # a model on :8080, redrawn on save
 bazel run //cli -- export png examples -o /tmp/out --background '#fff'
 ```
@@ -122,6 +122,10 @@ One Rust core, thin bindings, renderers that only draw.
   only run on a Mac; CI is Linux and skips them. `C4UITests` leaves a picture
   of the window in `bazel-testlogs/apps/apple/C4UI/C4UITests/test.outputs/`:
   look at it after changing the Swift views.
+- The macOS app has no editor: it shows files and follows them
+  (`C4Model.open`, looking four times a second as `serve` does) and
+  remembers what was open for the next launch. Only the web playground
+  draws `Screen::editor`.
 - The CLI embeds `//apps/web:viewer` (`cli/BUILD.bazel`); `rustc4 build`
   writes it beside `model.json`. The viewer decides between showing a
   published model and being the playground by whether `model.json` is there.

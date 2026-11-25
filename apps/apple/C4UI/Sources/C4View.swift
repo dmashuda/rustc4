@@ -4,11 +4,11 @@ import UniformTypeIdentifiers
 
 /// The viewer's window: a renderer and nothing more. It draws the Rust
 /// `Screen` (the views, the diagram, the panel about what is selected, the
-/// problems, the source) and reports taps and edits. Every word shown comes
-/// from the screen; what a click does is decided in Rust.
+/// problems) and reports taps. Every word shown comes from the screen; what
+/// a click does is decided in Rust. The source is not here: it is written
+/// in an editor, and the window follows the files.
 public struct C4View: View {
     @State private var model: C4Model
-    @State private var editorWidth: CGFloat = 400
     @State private var detailsWidth: CGFloat = 300
 
     public init(model: C4Model) {
@@ -63,16 +63,11 @@ public struct C4View: View {
     // ("more Update Constraints in Window passes than there are views").
     private var content: some View {
         HStack(spacing: 0) {
-            if let editor = screen.editor {
-                SourceEditor(editor: editor, generation: model.generation, screen: screen, model: model)
-                    .frame(width: editorWidth)
-                DragDivider(width: $editorWidth, range: 240...720, growsToTheRight: true)
-            }
             VStack(spacing: 0) {
                 stage
-                if screen.editor == nil, !screen.problems.isEmpty {
+                if !screen.problems.isEmpty {
                     Divider()
-                    ProblemList(title: screen.problemsTitle, problems: screen.problems, select: nil)
+                    ProblemList(title: screen.problemsTitle, problems: screen.problems)
                         .frame(height: 140)
                 }
             }
@@ -94,12 +89,21 @@ public struct C4View: View {
             )
                 .background(Color(nsOrUIColor: .textBackgroundColor))
         } else {
-            Text(screen.empty)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityIdentifier("empty")
+            VStack(spacing: 16) {
+                Text(screen.empty)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("empty")
+                #if os(macOS)
+                // Nothing has been opened: the way to open something.
+                if model.roots.isEmpty {
+                    Button(screen.controls.open) { Self.chooseModel(for: model) }
+                        .controlSize(.large)
+                }
+                #endif
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -320,70 +324,11 @@ private struct RowText: View {
     }
 }
 
-// MARK: - The source and its problems
-
-private struct SourceEditor: View {
-    let editor: Editor
-    /// Changes when the text was replaced from outside.
-    let generation: Int
-    let screen: Screen
-    let model: C4Model
-
-    /// What is being typed. Rust is told of every change, but never
-    /// writes back into it: only another file or another model does.
-    @State private var draft = ""
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if editor.files.count > 1 {
-                    Picker(editor.title, selection: Binding(get: { editor.file }, set: { model.tap("file.\($0)") })) {
-                        ForEach(Array(editor.files.enumerated()), id: \.offset) { index, file in
-                            Text(file.text).tag(UInt32(index))
-                        }
-                    }
-                    .labelsHidden()
-                } else if let only = editor.files.first {
-                    Text(only.text).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let remove = editor.remove {
-                    Button(remove.text) { model.tap(remove.id) }
-                        .help(remove.hint)
-                        .accessibilityIdentifier(remove.id)
-                }
-                Button(editor.add.text) { model.tap(editor.add.id) }
-                    .help(editor.add.hint)
-                    .accessibilityLabel(editor.add.hint)
-                    .accessibilityIdentifier(editor.add.id)
-            }
-            .controlSize(.small)
-            .padding(8)
-            TextEditor(text: $draft)
-                .font(.system(size: 12.5, design: .monospaced))
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("source")
-                .accessibilityLabel(editor.title)
-                .onChange(of: draft) { _, text in
-                    if text != editor.text { model.edit(file: editor.file, text: text) }
-                }
-            if !screen.problems.isEmpty {
-                Divider()
-                ProblemList(title: screen.problemsTitle, problems: screen.problems, select: nil)
-                    .frame(maxHeight: 160)
-            }
-        }
-        .onAppear { draft = editor.text }
-        .onChange(of: editor.file) { draft = editor.text }
-        .onChange(of: editor.files.map(\.text)) { draft = editor.text }
-        .onChange(of: generation) { draft = editor.text }
-    }
-}
+// MARK: - The problems in the source
 
 private struct ProblemList: View {
     let title: String
     let problems: [Problem]
-    let select: ((Problem) -> Void)?
 
     var body: some View {
         List {
@@ -396,7 +341,6 @@ private struct ProblemList: View {
                         Text(problem.text).textSelection(.enabled)
                     }
                     .help(problem.file)
-                    .onTapGesture { select?(problem) }
                 }
             }
         }
