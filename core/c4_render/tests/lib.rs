@@ -71,6 +71,11 @@ fn styles_show() {
     assert!(out.contains("<polyline"), "an open arrowhead");
     assert_eq!(out.matches("<polygon").count(), 4, "three arrowheads and a diamond");
     assert!(out.contains(r#"<g class="open""#), "somewhere to go");
+    assert!(
+        out.contains(r#"stroke-linecap="round"><rect class="hit""#)
+            && out.contains(r#"width="24" height="24""#),
+        "and more than two thin strokes to click"
+    );
 }
 
 #[test]
