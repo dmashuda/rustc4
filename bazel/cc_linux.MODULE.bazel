@@ -3,8 +3,7 @@
 Prebuilt clang/lld plus glibc, libc++, compiler-rt and libunwind built from
 source in Bazel: a Linux host needs no gcc, binutils, libc headers or python.
 It also links every Rust binary. Registered for Linux, wasm and Windows
-targets; on macOS, apple_support's Xcode toolchain stays in charge (Apple
-targets need Xcode regardless), and Android uses the NDK.
+targets; on macOS, apple_support's Xcode toolchain stays in charge.
 
 Windows (//bazel:windows_x86_64) is only ever a target, built for from Linux
 or macOS against MinGW-w64, which is built from source as glibc is.
@@ -13,14 +12,38 @@ or macOS against MinGW-w64, which is built from source as glibc is.
 bazel_dep(name = "llvm", version = "0.8.25")
 
 llvm_toolchain = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
-llvm_toolchain.exec(arch = "aarch64", os = "linux")
-llvm_toolchain.exec(arch = "x86_64", os = "linux")
-llvm_toolchain.exec(arch = "aarch64", os = "macos")
-llvm_toolchain.exec(arch = "x86_64", os = "macos")
-llvm_toolchain.target(arch = "aarch64", os = "linux")
-llvm_toolchain.target(arch = "x86_64", os = "linux")
-llvm_toolchain.target(arch = "wasm32", os = "none")
-llvm_toolchain.target(arch = "x86_64", os = "windows")
+llvm_toolchain.exec(
+    arch = "aarch64",
+    os = "linux",
+)
+llvm_toolchain.exec(
+    arch = "x86_64",
+    os = "linux",
+)
+llvm_toolchain.exec(
+    arch = "aarch64",
+    os = "macos",
+)
+llvm_toolchain.exec(
+    arch = "x86_64",
+    os = "macos",
+)
+llvm_toolchain.target(
+    arch = "aarch64",
+    os = "linux",
+)
+llvm_toolchain.target(
+    arch = "x86_64",
+    os = "linux",
+)
+llvm_toolchain.target(
+    arch = "wasm32",
+    os = "none",
+)
+llvm_toolchain.target(
+    arch = "x86_64",
+    os = "windows",
+)
 use_repo(llvm_toolchain, "llvm_toolchains")
 
 register_toolchains("@llvm_toolchains//:all")

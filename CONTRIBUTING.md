@@ -9,7 +9,7 @@ Everything is built by Bazel. Install
 [Bazelisk](https://github.com/bazelbuild/bazelisk) as `bazel` (it reads
 `.bazelversion`); the Rust, C++ and Node toolchains are downloaded by the
 build, so on Linux nothing else needs installing; on macOS it also needs
-Xcode. It is developed on macOS and tested on Linux. The first build
+Xcode, to link with. It is developed on macOS and tested on Linux. The first build
 fetches and compiles those toolchains and takes a while; later ones are
 quick.
 
@@ -17,15 +17,7 @@ quick.
 bazel run //cli -- check examples/shop.c4   # the command line: anything `rustc4` takes, after the `--`
 bazel run //cli -- serve examples/shop.c4   # a model on http://127.0.0.1:8080, redrawn on save
 bazel run //apps/web:serve                  # the playground, on http://localhost:8080
-bazel run //apps/macos:rustc4 -- examples/shop.c4   # the macOS app (needs Xcode)
 ```
-
-The macOS app is the same viewer, native, and like `rustc4 serve` it only
-shows: the source is written in whatever editor you use, and the window
-follows the files as you save them. **Open…** (⌘O), dropping a file or a
-folder on the window, or a path on the command line
-(as above) says which; started
-without one it opens what it was showing last time.
 
 The `rustc4` of a release is the CLI built with `--config=release`:
 
@@ -50,8 +42,7 @@ bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
     --output_groups=clippy_checks //core/... //bindings/... //cli/...
 ```
 
-`bazel test //core/...` is Rust only, and the fastest loop. The Apple tests
-only run on a Mac; CI is Linux and skips them.
+`bazel test //core/...` is Rust only, and the fastest loop.
 
 A change to the layout cannot be judged from tests alone: export the
 examples as PNG and look at them.
@@ -84,10 +75,7 @@ core/c4_render    Rust: a Diagram -> SVG text.
 core/c4_ui        Rust: the viewer as a state machine. A Screen out, taps in.
 core/c4_query     Rust: questions about a model, answered in text.
 bindings/wasm     wasm-bindgen wrapper of c4_ui -> JS/TS (web)
-bindings/uniffi   UniFFI wrapper of c4_ui      -> Swift (Apple)
 apps/web          renderer: TypeScript + esbuild. Draws the Screen, pans and zooms.
-apps/apple/C4UI   renderer: SwiftUI. Draws the Screen, and the Diagram in a Canvas.
-apps/macos        macos_application
 cli               Rust: check, export, build (static site), bundle, query, mcp
 examples          models to try (`bigbank.c4` is LikeC4's; see `examples/LICENSE.likec4`)
 tools/, bazel/    toolchains
@@ -102,10 +90,9 @@ arrowhead. A renderer draws shapes, paths and text at the coordinates given.
 
 That works without a font because text is measured from a table of
 Helvetica's widths (`text.rs`), and renderers draw with a font of that family.
-So the CLI, wasm in a browser and the native app all break lines in the same
-place and produce the same picture. The web draws the SVG Rust renders; the
-macOS app draws the `Diagram` itself with SwiftUI's `Canvas`, shape for shape
-what `c4_render` writes.
+So the CLI and wasm in a browser break lines in the same place and produce
+the same picture: the web draws the SVG Rust renders, the same the CLI
+exports.
 
 The layout (`graph.rs`) is a layered one written for this, since Graphviz is
 not something that compiles to wasm and a phone: rank, order to reduce
@@ -124,9 +111,7 @@ viewer changes Rust and nothing else. What stays with the platform is what
 only it can do: panning and zooming, the address bar, saving a file.
 
 Still to come here: **flows**, behaviour tests written once in Rust and run
-through every renderer; and for Android, the Kotlin half of the UniFFI
-binding and a renderer (`apps/apple/C4UI` is written to be shared with an
-iOS app).
+through every renderer.
 
 ## Releasing
 

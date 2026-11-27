@@ -5,8 +5,7 @@
 # this workflow from one that is not), and publishes them as a GitHub
 # release. The two Linux builds also go, as one image for both
 # architectures, to ghcr.io/<owner>/rustc4 (tools/docker/Dockerfile), under
-# the version and, unless it is a pre-release, `latest`. Only the CLI is
-# released: the macOS app is not.
+# the version and, unless it is a pre-release, `latest`.
 #
 # Run by hand (workflow_dispatch), or by a pull request that changes this
 # file or the image's, it builds and keeps the archives and the images as

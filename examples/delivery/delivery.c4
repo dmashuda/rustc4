@@ -3,7 +3,7 @@
 // far apart `autoLayout` puts things; `rank`; a legend.
 //
 //   bazel run //cli -- export png examples/delivery -o out --background '#fff'
-//   bazel run //apps/macos:rustc4 -- examples/delivery
+//   bazel run //cli -- serve examples/delivery
 
 specification {
   // `notation` is what the legend over a diagram says of a kind.

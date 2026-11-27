@@ -304,7 +304,6 @@ fn opening_another_model_replaces_this_one() {
         ("index", "1 element · 0 relationships · 1 view")
     );
     assert!(screen.editor.is_none() && screen.back.is_none());
-    assert_eq!(screen.controls.open, "Open…");
     // A viewer shown nothing says how to be shown something.
     let waiting = C4Ui::new(Vec::new(), false).screen();
     assert!(waiting.empty.starts_with("No model is open."), "{}", waiting.empty);

@@ -2,7 +2,7 @@
 // what a view can say about them.
 //
 //   bazel run //cli -- export png examples/library -o out --background '#fff'
-//   bazel run //apps/macos:rustc4 -- examples/library
+//   bazel run //cli -- serve examples/library
 
 specification {
   color paper rgb(120, 113, 108)
