@@ -256,7 +256,6 @@ Markdown in a description is shown as it is written.
 
 ## What is next
 
-- **iOS and Android.** The viewer is written to be shared with both.
 - **A bundled font for PNG export**, so the CLI's PNGs do not depend on what
   the machine has installed (they use Helvetica, Arial or the nearest
   sans-serif found).

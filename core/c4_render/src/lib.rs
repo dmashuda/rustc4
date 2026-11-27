@@ -212,8 +212,8 @@ fn node(out: &mut String, node: &Node) {
     }
     if node.navigate_to.is_some() {
         // A magnifying glass in the corner: there is a closer view. Under
-        // it, something to point at as large as the Apple drawing's
-        // (`DiagramHit`): the glass alone is two thin strokes.
+        // it, something larger to point at: the glass alone is two thin
+        // strokes.
         let (cx, cy) = (node.x + node.width - 17.0, node.y + if node.group { 22.0 } else { 16.0 });
         let color = if node.group { esc(&node.stroke) } else { "#fff".to_string() };
         let _ = write!(

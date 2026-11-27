@@ -2,12 +2,11 @@
 
 The toolchains live in bazel/*.MODULE.bazel, pulled in by the include() calls
 at the bottom. The layout is rust-core-experiment's
-(github.com/dmashuda/rust-core-experiment), with the Apple toolchain for the
-macOS app; Android's is still to come.
+(github.com/dmashuda/rust-core-experiment).
 
   * apple_support is depended on before rules_cc, because Bazel takes the
     first registered C/C++ toolchain and only apple_support's targets macOS
-    properly.
+    properly. It is what links the command line on a Mac.
   * register_toolchains() precedence follows the order the calls are reached:
     Rust, then LLVM (Linux and wasm).
 """
@@ -18,8 +17,6 @@ bazel_dep(name = "apple_support", version = "2.10.1")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.27")
 bazel_dep(name = "rules_rust", version = "0.74.0")
-bazel_dep(name = "rules_swift", version = "4.2.2")
-bazel_dep(name = "rules_apple", version = "5.3.1")
 
 # Order matters: see the docstring above.
 include("//bazel:rust.MODULE.bazel")

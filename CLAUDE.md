@@ -13,7 +13,6 @@ bazel run @rules_rust//tools/rustfmt   # format Rust
 bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
     --output_groups=clippy_checks //core/... //bindings/... //cli/...
 bazel run //apps/web:serve             # the playground on :8080
-bazel run //apps/macos:rustc4 -- examples/shop.c4   # the macOS app, following that file
 bazel run //cli -- serve examples/shop.c4   # a model on :8080, redrawn on save
 bazel run //cli -- export png examples -o /tmp/out --background '#fff'
 ```
@@ -77,9 +76,8 @@ One Rust core, thin bindings, renderers that only draw.
   `.png` / `.jpg` / `.gif` / `.webp` with its bytes in base64, which
   `Source::from_bytes` does; not read as a model), as is the text of a
   `descriptionFile` (`.md`, `.txt`);
-  `Workspace::wanted` (`C4Ui::wanted`) lists those not given, for whoever
-  reads files to read and give: the CLI and the macOS app do. The core
-  never touches the file system.
+  `Workspace::wanted` lists those not given, for whoever reads files to
+  read and give: the CLI does. The core never touches the file system.
 - **A legend is part of the `Diagram`** (`Diagram::legend`), over the
   drawing and inside its width and height, whenever the view shows
   something whose kind has a `notation`, unless it is turned off
@@ -93,8 +91,7 @@ One Rust core, thin bindings, renderers that only draw.
   Tests address things by them.
 - `c4_model` has no dependencies. `c4_layout` adds only serde (the Diagram
   serializes itself). Neither may depend on a font, a clock, the file system
-  or anything platform-specific: both compile to wasm and will compile to
-  iOS and Android.
+  or anything platform-specific: both compile to wasm.
 - Core crates are visible only to `//core`, `//bindings` and `//cli`. Apps
   reach Rust through the bindings, never directly.
 - **Text is measured from the table in `c4_layout/src/text.rs`**, never from
@@ -115,24 +112,12 @@ One Rust core, thin bindings, renderers that only draw.
   its end (`#[cfg(test)] #[path = "../tests/<file>.rs"] mod tests;`), so
   they still see what is private. Something only tests need goes in the
   test file too.
-- A new field on `Screen` or `Diagram` touches: the Rust struct, the remote
-  declaration in `bindings/uniffi/src/lib.rs` (the compiler catches a
-  mismatch), the type in `apps/web/src/main.ts`, and for `Diagram` both
-  drawings of it: `core/c4_render` (SVG) and
-  `apps/apple/C4UI/Sources/DiagramDrawing.swift`. Those two must stay shape
-  for shape the same. The web gets the screen as JSON, so `bindings/wasm`
-  does not change. UniFFI has no `usize`: use `u32`.
-- Several of the bindings' names are also SwiftUI's (`Label`, `Edge`,
-  `Section`, `Link`, `Shape`, `Anchor`): in Swift write `C4FFI.Label` or
-  `SwiftUI.Label`.
-- Apple tests (`//bindings/uniffi:C4FFITests`, `//apps/apple/C4UI:C4UITests`)
-  only run on a Mac; CI is Linux and skips them. `C4UITests` leaves a picture
-  of the window in `bazel-testlogs/apps/apple/C4UI/C4UITests/test.outputs/`:
-  look at it after changing the Swift views.
-- The macOS app has no editor: it shows files and follows them
-  (`C4Model.open`, looking four times a second as `serve` does) and
-  remembers what was open for the next launch. Only the web playground
-  draws `Screen::editor`.
+- A new field on `Screen` touches the Rust struct and the type in
+  `apps/web/src/main.ts`; one on `Diagram`, the struct and its drawing in
+  `core/c4_render` (SVG). The web gets the screen as JSON, so
+  `bindings/wasm` does not change.
+- Only the playground draws `Screen::editor`: a published or served model
+  is shown, not edited.
 - The CLI embeds `//apps/web:viewer` (`cli/BUILD.bazel`); `rustc4 build`
   writes it beside `model.json`. The viewer decides between showing a
   published model and being the playground by whether `model.json` is there.

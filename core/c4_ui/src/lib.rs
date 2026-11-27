@@ -186,8 +186,6 @@ pub struct Controls {
     pub zoom_in: String,
     pub zoom_out: String,
     pub fit: String,
-    /// For an app that can read a model from disk.
-    pub open: String,
 }
 
 pub struct C4Ui {
@@ -300,13 +298,6 @@ impl C4Ui {
         let model = &self.workspace.model;
         let options = c4_layout::Options { legend: self.legend };
         model.compute_view(view).map(|v| c4_layout::layout_with(&v, &model.colors, options))
-    }
-
-    /// Files the sources name (an icon's image, a description's text) that
-    /// are not among them, each by the name it would have. A front end that
-    /// can read files reads them and gives them with the rest.
-    pub fn wanted(&self) -> &[String] {
-        &self.workspace.wanted
     }
 
     /// The sources as they stand, edits and all: for a front end that keeps
@@ -528,7 +519,6 @@ impl C4Ui {
                 zoom_in: "Zoom in".into(),
                 zoom_out: "Zoom out".into(),
                 fit: "Fit to window".into(),
-                open: "Open…".into(),
             },
         }
     }

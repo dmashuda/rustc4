@@ -44,7 +44,7 @@ type Screen = {
   problems: Problem[];
   editor: Editor | null;
   status: string;
-  controls: { zoomIn: string; zoomOut: string; fit: string; open: string };
+  controls: { zoomIn: string; zoomOut: string; fit: string };
 };
 type Source = { name: string; text: string };
 
